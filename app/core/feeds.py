@@ -48,7 +48,7 @@ FEEDS = {
     "Linksnet (Meta-Rechtslinks-Themen)": "https://www.linksnet.de/rss",
     "Norbert Häring": "https://norberthaering.de/feed",
     "Overton‑Magazin (Politik)": "https://overton-magazin.de/feed/politik",
-    "Berliner Zeitung (Politik)": "https://www.berliner-zeitung.de/rss/politik",
+    "Berliner Zeitung (Politik)": "https://www.berliner-zeitung.de/feed.id_politik_und_gesellschaft.xml",
     "der Freitag (Politik)": "https://www.freitag.de/politik/@@RSS",
     "Makroskop": "https://makroskop.eu/feed",
     "Lost in Europe": "https://lostineurope.eu/feed",
