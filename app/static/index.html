@@ -1,0 +1,1210 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>News Trends & Visuals</title>
+  <link rel="stylesheet" href="/ui/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3-cloud/build/d3.layout.cloud.min.js"></script>
+</head>
+<body>
+
+<!-- Top-Bar -->
+<nav class="topbar">
+  <button id="filterOpen" aria-label="Filter öffnen">☰ Filter</button>
+  <div class="title">📰 News Trends</div>
+  <div class="right">
+    <input type="text" id="keywordInput" placeholder="🔍 z. B. Klima">
+    <button onclick="searchByKeyword()">Suchen</button>
+    <button onclick="resetFilters()">Reset</button>
+  </div>
+</nav>
+
+<!-- Aktive Filter: immer sichtbar -->
+<div id="activeFiltersBar" class="active-filters-bar" aria-live="polite"></div>
+
+<!-- Drawer (Off-Canvas) -->
+<aside id="filterDrawer" class="drawer" aria-hidden="true">
+  <header class="drawer-header">
+    <h3>Filter</h3>
+    <button id="drawerClose" aria-label="Filter schließen">✕</button>
+  </header>
+
+  <section class="drawer-section">
+    <h4>Zeitraum</h4>
+    <div class="btnrow">
+      <button onclick="setTimeFilter(24)">24h</button>
+      <button onclick="setTimeFilter(72)">72h</button>
+      <button onclick="setTimeFilter(168)">7 Tage</button>
+      <button onclick="setTimeFilter(720)">30 Tage</button>
+    </div>
+  </section>
+
+  <section class="drawer-section">
+    <h4>Bias</h4>
+    <div class="btnrow" id="biasFilters">
+      <button onclick="setBiasFilter('systemkritisch')">Systemkritisch</button>
+      <button onclick="setBiasFilter('systemnah')">Systemnah</button>
+      <button onclick="setBiasFilter('globalistisch')">Globalistisch</button>
+      <button onclick="setBiasFilter('nationalistisch')">Nationalistisch</button>
+      <button onclick="setBiasFilter(null)">Alle</button>
+    </div>
+  </section>
+
+  <section class="drawer-section">
+    <h4>Quelle</h4>
+    <!-- Nutze dein bestehendes Select mit den gleichen Optionen -->
+    <select id="sourceSelect">
+      <option value="">-- Alle Quellen --</option>
+        <option value="Zeit">Zeit</option>
+        <option value="Spiegel">Spiegel</option>
+        <option value="Süddeutsche">Süddeutsche</option>
+        <option value="Handelsblatt">Handelsblatt</option>
+        <option value="Deutschlandfunk">Deutschlandfunk</option>
+        <option value="Tagesschau">Tagesschau</option>
+        <option value="FAZ">FAZ</option>
+        <option value="n-tv">n-tv</option>
+        <option value="Focus">Focus</option>
+        <option value="Welt">Welt</option>
+        <option value="RP Online">RP Online</option>
+        <option value="Stern">Stern</option>
+        <option value="Tichys Einblick">Tichys Einblick</option>
+        <option value="Reitschuster">Reitschuster</option>
+        <option value="Unzensuriert">Unzensuriert</option>
+        <option value="Achse des Guten">Achse des Guten</option>
+        <option value="Anti‑Spiegel">Anti‑Spiegel</option>
+        <option value="Telepolis">Telepolis</option>
+        <option value="NachDenkSeiten">NachDenkSeiten</option>
+        <option value="Volksverpetzer">Volksverpetzer</option>
+        <option value="Krautzone">Krautzone</option>
+        <option value="Niggemeier/Übermedien">Niggemeier/Übermedien</option>
+        <option value="taz">taz</option>
+        <option value="junge Welt">junge Welt</option>
+        <option value="NZZ Deutschland">NZZ Deutschland</option>
+        <option value="Watson Deutschland">Watson Deutschland</option>
+        <option value="Frankfurter Rundschau">Frankfurter Rundschau</option>
+        <option value="Bild">Bild</option>
+        <option value="Nius">Nius</option>
+        <option value="Deutsche Wirtschaftsnachrichten">Deutsche Wirtschaftsnachrichten</option>
+        <option value="Manova">Manova</option>
+        <option value="Auf1">Auf1</option>
+        <option value="RT DE">RT DE</option>
+        <option value="Correctiv">Correctiv</option>
+        <option value="Netzpolitik.org">Netzpolitik.org</option>
+        <option value="Linksnet (Meta-Rechtslinks-Themen)">Linksnet (Meta-Rechtslinks-Themen)</option>
+        <option value="Norbert Häring">Norbert Häring</option>
+        <option value="Overton‑Magazin (Politik)">Overton‑Magazin (Politik)</option>
+        <option value="Berliner Zeitung (Politik)">Berliner Zeitung (Politik)</option>
+        <option value="der Freitag (Politik)">der Freitag (Politik)</option>
+        <option value="Makroskop">Makroskop</option>
+        <option value="Lost in Europe">Lost in Europe</option>
+        <option value="German Foreign Policy">German Foreign Policy</option>
+        <option value="Antikrieg">Antikrieg</option>
+        <option value="Infosperber (Politik)">Infosperber (Politik)</option>
+        <option value="Legal Tribune Online (Politik)">Legal Tribune Online (Politik)</option>
+        <option value="TauBlog (Politik)">TauBlog (Politik)</option>
+        <option value="Jacobin Deutschland">Jacobin Deutschland</option>
+        <option value="Multipolar">Multipolar</option>
+        <option value="Junge Freiheit">Junge Freiheit</option>
+        <option value="neues deutschland">neues deutschland</option>
+    </select>
+  </section>
+
+  <section class="drawer-section">
+    <label class="teaser-inline">
+      <input type="checkbox" id="teaserToggle"> Teaser einbeziehen
+    </label>
+  </section>
+
+  <footer class="drawer-footer">
+    <button id="drawerDone">Fertig</button>
+  </footer>
+</aside>
+
+<!-- Halbtransparenter Hintergrund beim offenen Drawer -->
+<div id="scrim" class="scrim" aria-hidden="true"></div>
+
+   <section id="heroWordcloud">
+      <div class="wordcloud-heading">
+      </div>
+      <div id="wordcloud"></div>
+    </section>
+
+<section id="keywordTopAbsoluteSection">
+  <h2>📊 Top 30 Keywords nach absoluten Nennungen</h2>
+  <div id="keywordTopAbsoluteColumns" class="keyword-columns"></div>
+</section>
+
+
+
+<section id="keywordTrends" class="trend-section trends--minimal">
+  <h2>📈 Dynamische Keyword-Trends</h2>
+  <div class="trend-grid" id="trendGrid"></div>
+</section>
+
+
+
+  <div class="chart-row">
+    <div class="chart-box">
+      <h2>🧭 Medien-Kompass</h2>
+      <canvas id="mediaCompassChart"></canvas>
+    </div>
+    <div class="chart-box">
+      <h2>⏲️ Zeitverlauf der Tags</h2>
+      <canvas id="timelineChart"></canvas>
+    </div>
+  </div>
+
+  <div id="filteredArticles"></div>
+
+
+
+
+<section id="extremeBubbles" class="bubble-section">
+  <h2>🫧 Exklusive Begriffe aus Randmedien</h2>
+  <div id="sortControls" class="bias-filter-bar">
+    <label for="bubbleSort">Sortierung:</label>
+    <select id="bubbleSort" onchange="loadExtremeBubbles()">
+      <option value="bias-desc">Bias (hoch → niedrig)</option>
+      <option value="bias-asc">Bias (niedrig → hoch)</option>
+      <option value="count-desc">Anzahl (hoch → niedrig)</option>
+      <option value="count-asc">Anzahl (niedrig → hoch)</option>
+    </select>
+  </div>
+
+
+  <div id="extremeKeywordBubbles" class="bubble-container"></div>
+</section>
+
+<section class="chart-box" id="keywordChartOverlayBox">
+  <h2>🧭 Keyword-Koordinaten & Heatmap</h2>
+  <div id="keywordChartOverlayContainer"
+      style="position: relative; width: 100%; max-width: 1000px; height: 600px; margin: auto;">
+    <svg id="keywordHeatmapOverlay"
+        style="position: absolute; top: 0; left: 0; z-index: 100; pointer-events: none;"></svg>
+
+    <canvas id="keywordScatterChart"
+            style="z-index: 1000; width: 100%; height: 100%; display: block;"></canvas>
+  </div>
+
+
+</section>
+
+
+
+
+  <div class="container">
+
+    <ul id="articles" class="article-list"></ul>
+
+
+
+  </div>
+
+
+
+  <script>
+
+
+    let activeBiasFilter = null;
+    let keywordScatterChart = null;
+    let keywordTimelineChart = null;
+    let mediaCompassChart = null;
+    let selectedKeyword = "";
+    let filters = {
+      hours: 72,
+      source: "",
+      keyword: "",
+      teaser: false
+    };
+
+
+
+    async function loadFilteredArticles() {
+      const params = new URLSearchParams();
+
+      if (filters.hours) params.append("hours", filters.hours);
+      if (filters.source) params.append("source", filters.source);
+      if (filters.keyword) params.append("keyword", filters.keyword);
+      if (filters.teaser) params.append("teaser", "true");
+
+      const res = await fetch(`/articles/filtered?${params.toString()}`);
+      const data = await res.json();
+
+      renderFilteredArticles(data);
+      loadWordcloud();
+      loadFilteredMediaCompass();
+      updateFilterDisplay();
+      updateURLFromFilters();
+
+    }
+
+
+
+    function renderFilteredArticles(articles) {
+      const container = document.getElementById("articles");
+      container.innerHTML = "";
+
+      if (articles.length === 0) {
+        container.innerHTML = "<p>Keine Artikel gefunden.</p>";
+        return;
+      }
+
+      for (const a of articles) {
+        const date = new Date(a.published_at).toLocaleString("de-DE", {
+          day: "2-digit", month: "2-digit", year: "numeric",
+          hour: "2-digit", minute: "2-digit"
+        });
+
+        const li = document.createElement("li");
+        li.classList.add("article");
+        li.innerHTML = `
+          <a href="${a.url}" target="_blank">${a.title}</a><br>
+          <span class="source">${a.source} – ${date}</span>
+        `;
+        container.appendChild(li);
+      }
+    }
+
+
+
+
+
+
+    async function searchByKeyword(kw = null) {
+      const keyword = kw || document.getElementById("keywordInput").value.trim();
+      if (!keyword) return;
+
+      filters.keyword = keyword;
+      selectedKeyword = keyword;
+      loadFilteredArticles();
+      loadExtremeBubbles();
+      renderKeywordTimeline(keyword);
+
+    }
+
+
+
+    function renderHeadlineList(articles) {
+      const container = document.getElementById("filteredArticles");
+      if (articles.length === 0) {
+        container.innerHTML = "<p>Keine Artikel gefunden.</p>";
+        return;
+      }
+
+      container.innerHTML = `
+        <h3>Artikel zu "${selectedKeyword}" von ausgewähltem Medium</h3>
+        <ul>
+          ${articles.map(a => `<li><a href="${a.url}" target="_blank">${a.title}</a></li>`).join("")}
+        </ul>
+      `;
+    }
+
+
+async function loadKeywordTrends() {
+  const res = await fetch("/keywords/trending");
+  const data = await res.json();
+
+  const grid = document.getElementById("trendGrid");
+  grid.innerHTML = "";
+
+  for (const label of ["24h", "72h", "7d", "30d"]) {
+    const entry = data[label];
+    if (!entry) continue;
+
+    const group = document.createElement("div");
+    group.className = "trend-group";
+
+    const heading = document.createElement("h4");
+    heading.textContent = label;
+    group.appendChild(heading);
+
+    for (const type of ["top", "flop"]) {
+      const sublist = document.createElement("div");
+      sublist.className = "trend-sublist";
+
+      const h5 = document.createElement("h5");
+      h5.textContent = type === "top" ? "🔼 Aufsteiger" : "🔽 Absteiger";
+      sublist.appendChild(h5);
+
+      const ul = document.createElement("ul");
+      for (const item of entry[type]) {
+        const li = document.createElement("li");
+        const pctChange = Math.round(item.change * 100); // von Dezimal in %
+
+        li.innerHTML = `
+          ${item.word}
+          <span class="${pctChange >= 0 ? 'trend-up' : 'trend-down'}">
+            (${item.delta >= 0 ? "+" : ""}${item.delta} | ${pctChange >= 0 ? "+" : ""}${pctChange}%)
+          </span>
+        `;
+        li.title = `Aktuell: ${item.delta + (item.delta >= 0 ? "+" : "")} vs. Vorher: ${item.delta - item.delta}`;
+
+        li.onclick = () => searchByKeyword(item.word);
+        ul.appendChild(li);
+      }
+
+      sublist.appendChild(ul);
+      group.appendChild(sublist);
+    }
+
+    grid.appendChild(group);
+  }
+}
+
+async function loadTopAbsoluteKeywords() {
+  const res = await fetch(`/keywords/top-absolute?hours=${filters.hours}`);
+  const data = await res.json();
+
+  const container = document.querySelector("#keywordTopAbsoluteColumns");
+  container.innerHTML = "";
+
+  // In 3 Blöcke à 10 teilen
+  const chunkSize = 10;
+  for (let i = 0; i < 3; i++) {
+    const chunk = data.slice(i * chunkSize, (i + 1) * chunkSize);
+
+    const colDiv = document.createElement("div");
+    colDiv.className = "keyword-column";
+
+    const table = document.createElement("table");
+    table.innerHTML = `
+      <thead>
+        <tr>
+          <th>Keyword</th>
+          <th>Aktuell</th>
+          <th>Δ abs</th>
+          <th>Δ %</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    `;
+
+    const tbody = table.querySelector("tbody");
+
+    chunk.forEach(row => {
+      const pctChange = row.change_pct;
+      const trendClass = pctChange >= 0 ? "trend-up" : "trend-down";
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${row.word}</td>
+        <td>${row.current}</td>
+        <td class="${trendClass}">${row.delta >= 0 ? "+" : ""}${row.delta}</td>
+        <td class="${trendClass}">${pctChange >= 0 ? "+" : ""}${pctChange}%</td>
+      `;
+
+      // ✅ Klick-Event: Suchfunktion aufrufen
+      tr.style.cursor = "pointer";
+      tr.onclick = () => searchByKeyword(row.word);
+
+      tbody.appendChild(tr);
+    });
+
+    colDiv.appendChild(table);
+    container.appendChild(colDiv);
+  }
+}
+
+
+
+  // zentrale Refresh-Funktion: alles neu laden, was vom Bias abhängt
+  function applyFilters() {
+    loadExtremeBubbles();
+    loadTopAbsoluteKeywords();
+    loadFilteredArticles();
+    loadKeywordTrends();
+    loadWordcloud();
+    loadFilteredMediaCompass();
+    updateFilterDisplay();
+    updateURLFromFilters && updateURLFromFilters(); // falls vorhanden
+  }
+
+  // Setter für den Bias-Filter: setzt den Filter und triggert die Aktualisierung
+  function setBiasFilter(filterName) {
+    activeBiasFilter = filterName || null;
+    // (Optional: Buttons visuell markieren)
+    try {
+      document.querySelectorAll('#biasFilters button').forEach(btn => {
+        btn.classList.toggle('active', btn.textContent.toLowerCase().includes(filterName ?? 'alle'));
+      });
+    } catch (_) {}
+    applyFilters();
+  }
+
+  // EINZIGE Version der Prüf-Funktion
+  function biasPassesFilter(bias) {
+    // Kein aktiver Filter → alles zulassen
+    if (!activeBiasFilter) return true;
+
+    // Aktiver Filter → nur Elemente mit gültigem Bias zulassen
+    if (!bias || !Number.isFinite(bias.x) || !Number.isFinite(bias.y)) return false;
+
+    const { x, y } = bias;
+
+    switch (activeBiasFilter) {
+      case 'systemkritisch':   return x <= -0.1;
+      case 'systemnah':        return x >=  0.1;
+      case 'globalistisch':    return y >=  0.1;
+      case 'nationalistisch':  return y <= -0.1;
+      default:                 return true;
+    }
+  }
+
+
+
+async function loadExtremeBubbles() {
+  const bubblesRes = await fetch(`/keywords/extreme-bubble?hours=${filters.hours}`);
+  const bubbleData = await bubblesRes.json();
+
+  const biasRes = await fetch(`/keywords/bias-vector?hours=${filters.hours}`);
+  const biasData = await biasRes.json();
+
+  const container = document.getElementById("extremeKeywordBubbles");
+  container.innerHTML = "";
+
+  const sortMode = getSelectedBubbleSort(); // z. B. "bias-desc"
+
+  // Daten kombinieren
+  let bubbles = bubbleData.map(([word, count]) => {
+    const bias = biasData[word];
+    const strength = bias ? Math.sqrt(bias.x ** 2 + bias.y ** 2) : 0;
+    return { word, count, bias, strength };
+  });
+
+  // Filter anwenden
+  bubbles = bubbles.filter(({ bias }) => biasPassesFilter(bias));
+
+  // Sortieren
+  bubbles.sort((a, b) => {
+    switch (sortMode) {
+      case "count-asc": return a.count - b.count;
+      case "count-desc": return b.count - a.count;
+      case "bias-asc": return a.strength - b.strength;
+      case "bias-desc":
+      default: return b.strength - a.strength;
+    }
+  });
+
+  renderKeywordScatterChart(bubbles);
+
+  if (filters.keyword) {
+    const match = bubbles.find(b => b.word === filters.keyword);
+    container.innerHTML = "";
+
+    if (match) {
+      renderSingleBubble(match.word, match.count, match.bias);
+    } else {
+      container.innerHTML = "<p>Kein passendes Bubble-Keyword gefunden.</p>";
+    }
+
+    return;
+  }
+
+
+
+  // Anzeige
+  for (const { word, count, bias } of bubbles) {
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+
+    const label = bias
+      ? `${word} (${count}) | x: ${bias.x}, y: ${bias.y}`
+      : `${word} (${count})`;
+
+    if (bias) {
+      bubble.style.backgroundColor = getBiasGradientColor(bias.x, bias.y);
+      bubble.style.color = "#fff";
+      bubble.title = `x: ${bias.x}, y: ${bias.y}`;
+    }
+
+    bubble.textContent = label;
+    bubble.onclick = () => {
+      container.innerHTML = ""; // Alle anderen Bubbles entfernen
+      renderSingleBubble(word, count, bias); // Nur diese Bubble anzeigen
+      searchByKeyword(word); // Artikel laden wie gewohnt
+    };
+
+    container.appendChild(bubble);
+  }
+}
+
+function renderSingleBubble(word, count, bias) {
+  const container = document.getElementById("extremeKeywordBubbles");
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+
+  const label = bias
+    ? `${word} (${count}) | x: ${bias.x}, y: ${bias.y}`
+    : `${word} (${count})`;
+
+  if (bias) {
+    bubble.style.backgroundColor = getBiasGradientColor(bias.x, bias.y);
+    bubble.style.color = "#fff";
+    bubble.title = `x: ${bias.x}, y: ${bias.y}`;
+  }
+
+  bubble.textContent = label;
+  container.appendChild(bubble);
+}
+
+
+function getBiasGradientColor(x, y) {
+  const angle = Math.atan2(y, x);
+  const hue = ((angle * 180 / Math.PI) + 360) % 360;
+
+  const r = Math.min(Math.sqrt(x * x + y * y), 1); // 0 (zentral) bis 1 (extrem)
+  const saturation = Math.round(r * 100);          // 0–100%
+  const lightness = 60;                            // optional: 65 - 20 * r
+
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+}
+
+
+
+
+
+
+async function loadWordcloud() {
+  const params = new URLSearchParams();
+  if (filters.hours) params.append("hours", filters.hours);
+  if (filters.source) params.append("source", filters.source);
+  if (filters.keyword) params.append("keyword", filters.keyword);
+  if (filters.teaser) params.append("teaser", "true");
+
+  const res = await fetch('/headlines/words?' + params.toString());
+  const data = await res.json();
+
+  const words = data
+    .filter(([_, count]) => count >= 2)
+    .map(([text, count]) => ({ text, count }))
+    .sort((a, b) => b.count - a.count); // sortiere nach Häufigkeit absteigend
+
+  d3.select("#wordcloud").html(""); // alte SVG löschen
+
+  let currentWordcloudData = words;
+
+  d3.layout.cloud()
+    .spiral("archimedean") // oder "rectangular"
+    .size([window.innerWidth, window.innerHeight])
+    .words(words)
+    .rotate(() => ~~(Math.random() * 2) * 90)
+    .font("Impact")
+    .fontSize(d => scaleFontSize(d.count))
+    .on("end", draw)
+    .start();
+
+  function scaleFontSize(count) {
+    const minSize = 24;
+    const maxSize = 68;
+
+    const counts = currentWordcloudData.map(w => w.count);
+    const minCount = Math.min(...counts);
+    const maxCount = Math.max(...counts);
+
+    if (maxCount === minCount) return minSize;
+
+    return minSize + ((count - minCount) / (maxCount - minCount)) * (maxSize - minSize);
+  }
+
+
+  function scaleFontWeight(count) {
+    const minWeight = 300;
+    const maxWeight = 900;
+
+    const counts = currentWordcloudData.map(w => w.count);
+    const minCount = Math.min(...counts);
+    const maxCount = Math.max(...counts);
+
+    if (maxCount === minCount) return minWeight;
+
+    return minWeight + ((count - minCount) / (maxCount - minCount)) * (maxWeight - minWeight);
+  }
+
+
+
+  function draw(words) {
+    const svg = d3.select("#wordcloud").append("svg")
+      .attr("width", window.innerWidth)
+      .attr("height", window.innerHeight);
+
+    const g = svg.append("g")
+      .attr("transform", `translate(${window.innerWidth / 2},${window.innerHeight / 2})`);
+
+    const texts = g.selectAll("text")
+      .data(words)
+      .enter().append("text")
+      .style("font-size", d => scaleFontSize(d.count) + "px")
+      .style("font-family", "Lato")
+      .style("fill", () => d3.schemeCategory10[Math.floor(Math.random() * 10)])
+      .style("font-weight", d => scaleFontWeight(d.count))
+      .attr("text-anchor", "middle")
+      .attr("transform", d => `translate(${d.x},${d.y})rotate(${d.rotate})`)
+      .text(d => d.text);
+
+    texts.append("title").text(d => `${d.text}: ${d.count}x`);
+
+    texts.on("click", (_, d) => {
+      searchByKeyword(d.text);
+      loadFilteredMediaCompass(d.text);
+      renderKeywordTimeline(d.text);
+    });
+  }
+}
+
+
+async function loadMediaCompass() {
+  const res = await fetch("/media-positions");
+  const data = await res.json();
+  drawMediaCompass(data, "Medien");
+}
+
+
+function drawMediaCompass(data, label = "Medien") {
+  const ctx = document.getElementById("mediaCompassChart").getContext("2d");
+
+  if (mediaCompassChart instanceof Chart) {
+    mediaCompassChart.destroy();
+  }
+
+  const maxCount = Math.max(...data.map(d => d.count || 1));
+
+  mediaCompassChart = new Chart(ctx, {
+    type: "scatter",
+    data: {
+      datasets: [{
+        label: label,
+        data: data.map(d => ({
+          x: d.x,
+          y: d.y,
+          label: d.medium,
+          count: d.count
+        })),
+        backgroundColor: "#3b82f6",
+        pointRadius: ctx => {
+          const count = ctx.raw.count || 1;
+          return Math.max(4, count / maxCount * 20);
+        }
+      }]
+    },
+
+    options: {
+      onClick: async (evt, elements) => {
+        if (elements.length === 0) return;
+
+        const point = elements[0];
+        const medium = mediaCompassChart.data.datasets[point.datasetIndex].data[point.index].label;
+        filters.source = medium;
+        loadFilteredArticles();
+        const encodedMedium = encodeURIComponent(medium);
+
+        let url = "";
+        if (selectedKeyword) {
+          url = `/headlines/by-keyword-and-source?word=${selectedKeyword}&source=${encodedMedium}`;
+        } else {
+          url = `/headlines/by-source?source=${encodedMedium}`;
+        }
+
+        const res = await fetch(url);
+        const articles = await res.json();
+        renderHeadlineList(articles);
+      },
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.raw.label} (${ctx.raw.count} Artikel)`
+          }
+        }
+      },
+      scales: {
+        x: {
+          min: -1, max: 1,
+          title: { display: true, text: "Systemkritisch (–1) → Systemnah (+1)" }
+        },
+        y: {
+          min: -1, max: 1,
+          title: { display: true, text: "Nationalistisch (–1) → Globalistisch (+1)" }
+        }
+      }
+    }
+  });
+}
+
+
+
+function resetFilters() {
+  filters = {
+    hours: 72,
+    source: "",
+    keyword: "",
+    teaser: false
+  };
+
+  // UI zurücksetzen
+  document.getElementById("sourceSelect").value = "";
+  document.getElementById("keywordInput").value = "";
+  document.getElementById("teaserToggle").checked = false;
+
+  selectedKeyword = "";
+  loadFilteredArticles();
+  loadExtremeBubbles();
+  loadTopAbsoluteKeywords();
+
+}
+
+function getSelectedBubbleSort() {
+  const select = document.getElementById("bubbleSort");
+  return select ? select.value : "bias-desc";
+}
+
+function renderKeywordScatterChart(bubbles) {
+  const canvas = document.getElementById("keywordScatterChart");
+  const ctx = canvas.getContext("2d");
+
+  // 🔧 Kritisch: echte Canvas-Größe setzen!
+  canvas.width = canvas.clientWidth;
+  canvas.height = canvas.clientHeight;
+
+  const data = bubbles
+    .filter(b => b.bias && b.count >= 3)
+    .map(b => ({
+      x: b.bias.x,
+      y: b.bias.y,
+      r: Math.min(3 + Math.sqrt(b.count), 15),
+      label: b.word,
+      backgroundColor: b.word === filters.keyword ? "#ef4444" : "#2563eb"
+    }));
+
+  if (keywordScatterChart instanceof Chart) {
+    keywordScatterChart.destroy();
+  }
+
+  keywordScatterChart = new Chart(ctx, {
+    type: 'bubble',
+    data: {
+      datasets: [{
+        label: "Keywords",
+        data: data.map(d => ({ x: d.x, y: d.y, r: d.r, label: d.label })),
+        backgroundColor: data.map(d => d.backgroundColor),
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      onClick: (evt, elements) => {
+        if (elements.length === 0) return;
+        const point = elements[0];
+        const word = keywordScatterChart.data.datasets[0].data[point.index].label;
+        loadKeywordDensity(word);
+        renderKeywordTimeline(word);
+      },
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.raw.label} (${ctx.raw.r.toFixed(1)} Radius)`
+          }
+        }
+      },
+      scales: {
+        x: {
+          min: -1, max: 1,
+          title: { display: true, text: "Systemkritisch → Systemnah" }
+        },
+        y: {
+          min: -1, max: 1,
+          title: { display: true, text: "Nationalistisch → Globalistisch" }
+        }
+      }
+    }
+  });
+}
+
+function renderKeywordDensityHeatmap(rawData, keyword = "") {
+  const svg = d3.select("#keywordHeatmapOverlay");
+  svg.selectAll("*").remove();
+
+  const container = document.getElementById("keywordChartOverlayContainer");
+  const rect = container.getBoundingClientRect();
+  const width = rect.width;
+  const height = rect.height;
+
+  svg
+    .attr("width", width)
+    .attr("height", height)
+    .attr("viewBox", `0 0 ${width} ${height}`);
+
+  const xScale = d3.scaleLinear().domain([-1, 1]).range([0, width]);
+  const yScale = d3.scaleLinear().domain([-1, 1]).range([height, 0]);
+
+  const points = rawData.flatMap(d => {
+    const c = Math.min(30, Math.round(Math.log1p(d.count) * 5));
+    if (!isFinite(d.x) || !isFinite(d.y)) return [];
+    return Array(c).fill({ x: xScale(d.x), y: yScale(d.y) });
+  });
+
+  if (!points.length) {
+    console.warn("⚠️ Keine Punkte für Heatmap generiert");
+    return;
+  }
+
+  const densityData = d3.contourDensity()
+    .x(d => d.x)
+    .y(d => d.y)
+    .size([width, height])
+    .bandwidth(50)
+    .thresholds(20)(points);
+
+  const color = d3.scaleSequential(d3.interpolateYlOrRd)
+    .domain([0, d3.max(densityData, d => d.value)]);
+
+  svg.selectAll("path")
+    .data(densityData)
+    .join("path")
+    .attr("d", d3.geoPath())
+    .attr("fill", d => color(d.value))
+    .attr("stroke", "#fff")
+    .attr("stroke-width", 0.3);
+}
+
+
+async function loadKeywordDensity(keyword) {
+  const res = await fetch(`/media-positions/by-keyword?word=${encodeURIComponent(keyword)}&hours=${filters.hours}`);
+  const data = await res.json();
+  renderKeywordDensityHeatmap(data, keyword); // ✅ keyword wird mitgegeben
+}
+
+
+async function showKeywordHeatOverlay(keyword) {
+  const res = await fetch(`/media-positions/by-keyword?word=${encodeURIComponent(keyword)}&hours=${filters.hours}`);
+  const heatData = await res.json();
+
+  renderKeywordDensityHeatmap(heatData);
+  filters.keyword = keyword;
+  selectedKeyword = keyword;
+
+  // optional: neue Bubble-Daten laden und zeichnen
+  loadExtremeBubbles(); // <- ruft renderKeywordScatterChart() intern auf
+}
+
+async function renderKeywordTimeline(keyword) {
+  const res = await fetch(`/keywords/timeline?word=${encodeURIComponent(keyword)}&hours=${filters.hours}`);
+  const data = await res.json();
+
+  const labels = data.map(d => new Date(d.time).toLocaleString("de-DE", {
+    day: "2-digit", month: "2-digit", hour: "2-digit"
+  }));
+  const values = data.map(d => d.count);
+
+  const ctx = document.getElementById("timelineChart").getContext("2d");
+
+  if (keywordTimelineChart instanceof Chart) {
+    keywordTimelineChart.destroy();
+  }
+
+  keywordTimelineChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: `📈 Verlauf: ${keyword}`,
+        data: values,
+        fill: false,
+        borderColor: "#3b82f6",
+        tension: 0.3
+      }]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        x: {
+          title: { display: true, text: 'Zeit' }
+        },
+        y: {
+          beginAtZero: true,
+          title: { display: true, text: 'Nennungen' }
+        }
+      }
+    }
+  });
+}
+
+
+function getFiltersFromURL() {
+  const params = new URLSearchParams(window.location.search);
+
+  return {
+    hours: parseInt(params.get("hours")) || 72,
+    source: params.get("source") || "",
+    keyword: params.get("keyword") || "",
+    teaser: params.get("teaser") === "true"
+  };
+}
+
+
+    async function loadFilteredMediaCompass() {
+      const params = new URLSearchParams();
+      if (filters.hours) params.append("hours", filters.hours);
+      if (filters.source) params.append("source", filters.source);
+      if (filters.keyword) params.append("keyword", filters.keyword);
+      if (filters.teaser) params.append("teaser", "true");
+
+      const res = await fetch("/media-positions/filtered?" + params.toString());
+      const data = await res.json();
+      drawMediaCompass(data, "Gefilterte Medien");
+    }
+
+
+function updateURLFromFilters() {
+  const params = new URLSearchParams();
+  if (filters.hours) params.set("hours", filters.hours);
+  if (filters.source) params.set("source", filters.source);
+  if (filters.keyword) params.set("keyword", filters.keyword);
+  if (filters.teaser) params.set("teaser", "true");
+  const newURL = `${window.location.pathname}?${params.toString()}`;
+  window.history.replaceState({}, "", newURL);
+}
+
+
+
+    function setTimeFilter(h) {
+      filters.hours = h;
+      loadFilteredArticles();
+      loadExtremeBubbles();
+      loadTopAbsoluteKeywords();
+
+      if (filters.keyword) {
+      renderKeywordTimeline(filters.keyword);
+      }
+      }
+
+    // Event-Listener für die Quellen-Auswahl
+    document.getElementById("sourceSelect").addEventListener("change", (e) => {
+      filters.source = e.target.value;
+      loadFilteredArticles();
+      loadExtremeBubbles();
+      loadTopAbsoluteKeywords();
+      loadFilteredMediaCompass();
+      updateFilterDisplay();
+      updateURLFromFilters();
+    });
+
+
+    document.getElementById("teaserToggle").addEventListener("change", (e) => {
+      filters.teaser = e.target.checked;
+      loadFilteredArticles();
+      loadKeywordTrends();      // 🔄 aktualisieren
+      loadExtremeBubbles();     // 🔄 aktualisieren
+      loadWordcloud();
+      loadTopAbsoluteKeywords();
+      loadFilteredMediaCompass();
+      updateFilterDisplay();
+      updateURLFromFilters();
+
+
+
+    });
+
+
+
+    window.onload = () => {
+
+      filters = getFiltersFromURL();
+
+      document.getElementById("sourceSelect").value = filters.source;
+      document.getElementById("keywordInput").value = filters.keyword;
+      document.getElementById("teaserToggle").checked = filters.teaser;
+
+
+      loadWordcloud();
+
+      loadMediaCompass();
+      loadFilteredArticles();
+      loadKeywordTrends();        // 🔼 Trends laden
+      loadExtremeBubbles();       // 🫧 Randmedienbegriffe laden
+      loadTopAbsoluteKeywords();
+    };
+    window.searchByKeyword = searchByKeyword;
+
+/* === Drawer öffnen/schließen === */
+const drawer = document.getElementById('filterDrawer');
+const scrim  = document.getElementById('scrim');
+const btnOpen  = document.getElementById('filterOpen');
+const btnClose = document.getElementById('drawerClose');
+const btnDone  = document.getElementById('drawerDone');
+
+function openDrawer(){
+  drawer.classList.add('open'); drawer.setAttribute('aria-hidden','false');
+  scrim.classList.add('show');  scrim.setAttribute('aria-hidden','false');
+}
+function closeDrawer(){
+  drawer.classList.remove('open'); drawer.setAttribute('aria-hidden','true');
+  scrim.classList.remove('show');  scrim.setAttribute('aria-hidden','true');
+}
+btnOpen.addEventListener('click', openDrawer);
+btnClose.addEventListener('click', closeDrawer);
+btnDone.addEventListener('click', closeDrawer);
+scrim.addEventListener('click', closeDrawer);
+
+/* === Aktive Filter: Chips darstellen === */
+function renderActiveFilterChips(){
+  const bar = document.getElementById('activeFiltersBar');
+  if (!bar) return;
+  bar.innerHTML = ''; // reset
+
+  // Helper zum Erstellen eines Chips
+  const mk = (label, onRemove, {removable=true, ghost=false} = {})=>{
+    const pill = document.createElement('span');
+    pill.className = 'pill' + (ghost ? ' pill--ghost' : '');
+    pill.textContent = label;
+
+    if (removable){
+      const x = document.createElement('button');
+      x.className = 'pill-x';
+      x.type = 'button';
+      x.setAttribute('aria-label', label + ' entfernen');
+      x.textContent = '×';
+      x.onclick = onRemove;
+      pill.appendChild(x);
+    }
+    bar.appendChild(pill);
+  };
+
+  // Stunden (zeigen wir immer; entfernbar nur, wenn ≠ 72)
+  const hoursLabel = `🕓 ${filters.hours}h`;
+  mk(hoursLabel, () => {
+    if (filters.hours !== 72){
+      filters.hours = 72;
+      loadFilteredArticles();
+      loadExtremeBubbles();
+      loadTopAbsoluteKeywords();
+      loadFilteredMediaCompass();
+      updateURLFromFilters();
+      renderActiveFilterChips();
+    }
+  }, { removable: filters.hours !== 72 });
+
+  // Quelle
+  if (filters.source){
+    mk(`📰 ${filters.source}`, () => {
+      filters.source = '';
+      const sel = document.getElementById('sourceSelect'); if (sel) sel.value = '';
+      loadFilteredArticles();
+      loadExtremeBubbles();
+      loadTopAbsoluteKeywords();
+      loadFilteredMediaCompass();
+      updateURLFromFilters();
+      renderActiveFilterChips();
+    });
+  } else {
+    mk('📰 Alle Quellen', null, { removable:false, ghost:true });
+  }
+
+  // Keyword
+  if (filters.keyword){
+    mk(`🔍 ${filters.keyword}`, () => {
+      filters.keyword = '';
+      if (typeof selectedKeyword !== 'undefined') selectedKeyword = '';
+      const inp = document.getElementById('keywordInput'); if (inp) inp.value = '';
+      loadFilteredArticles();
+      loadExtremeBubbles();
+      loadTopAbsoluteKeywords();
+      loadFilteredMediaCompass();
+      updateURLFromFilters();
+      renderActiveFilterChips();
+    });
+  }
+
+  // Teaser
+  if (filters.teaser){
+    mk('📝 Teaser', () => {
+      filters.teaser = false;
+      const cb = document.getElementById('teaserToggle'); if (cb) cb.checked = false;
+      loadFilteredArticles();
+      loadExtremeBubbles();
+      loadTopAbsoluteKeywords();
+      loadFilteredMediaCompass();
+      updateURLFromFilters();
+      renderActiveFilterChips();
+    });
+  }
+
+  // Alle löschen (schneller Reset)
+  if (filters.source || filters.keyword || filters.teaser || filters.hours !== 72){
+    const all = document.createElement('button');
+    all.className = 'pill';
+    all.type = 'button';
+    all.textContent = 'Alle ×';
+    all.onclick = () => resetFilters(); // deine bestehende Funktion
+    bar.appendChild(all);
+  }
+}
+
+/* === Bestehende Anzeige-Funktion an neue Chips binden === */
+const _updateFilterDisplay = window.updateFilterDisplay || (()=>{});
+window.updateFilterDisplay = function(){
+  // Alte Textanzeige (falls noch vorhanden) aktualisieren
+  try { _updateFilterDisplay(); } catch {}
+  // Neue Chips rendern
+  renderActiveFilterChips();
+};
+
+/* === Nach Initialisierung & bei Filter-Events Chips aktualisieren === */
+window.addEventListener('load', renderActiveFilterChips);
+
+// Falls du setTimeFilter / resetFilters überschreibst, Chips dort erneut rendern:
+// Beispiel (optional), nur wenn du sie "wrappen" möchtest:
+/*
+const _setTimeFilter = window.setTimeFilter;
+window.setTimeFilter = function(h){
+  _setTimeFilter(h);
+  renderActiveFilterChips();
+};
+const _resetFilters = window.resetFilters;
+window.resetFilters = function(){
+  _resetFilters();
+  renderActiveFilterChips();
+};
+*/
+
+// Zeit-Buttons markieren
+const timeBtns = Array.from(document.querySelectorAll('.drawer-section:nth-of-type(1) .btnrow button'));
+function markActiveTime(h) {
+  timeBtns.forEach(b => b.classList.remove('is-active'));
+  const map = {24:'24h',72:'72h',168:'7 Tage',720:'30 Tage'};
+  const btn = timeBtns.find(b => b.textContent.trim() === map[h]);
+  if (btn) btn.classList.add('is-active');
+}
+const _setTimeFilter = window.setTimeFilter;
+window.setTimeFilter = function(h){
+  _setTimeFilter(h);
+  markActiveTime(h);
+};
+
+// Bias-Buttons markieren
+const biasBtns = Array.from(document.querySelectorAll('.drawer-section:nth-of-type(2) .btnrow button'));
+function markActiveBias(nameOrNull){
+  biasBtns.forEach(b => b.classList.remove('is-active'));
+  let label = 'Alle';
+  if (nameOrNull === 'systemkritisch') label = 'Systemkritisch';
+  else if (nameOrNull === 'systemnah')  label = 'Systemnah';
+  else if (nameOrNull === 'globalistisch') label = 'Globalistisch';
+  else if (nameOrNull === 'nationalistisch') label = 'Nationalistisch';
+  const btn = biasBtns.find(b => b.textContent.trim() === label);
+  if (btn) btn.classList.add('is-active');
+}
+const _setBiasFilter = window.setBiasFilter;
+window.setBiasFilter = function(name){
+  _setBiasFilter(name);
+  markActiveBias(name || null);
+};
+
+// Initiale Markierung (nach load)
+window.addEventListener('load', () => {
+  markActiveTime(filters.hours);
+  markActiveBias(window.activeBiasFilter || null);
+});
+
+  </script>
+</body>
+</html>

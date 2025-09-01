@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+feedparser
+pydantic
+nltk
+beautifulsoup4
+fastapi-utils
+typing_inspect
+
