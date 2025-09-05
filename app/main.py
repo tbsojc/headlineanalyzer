@@ -1,21 +1,28 @@
 # ============================
 # 📁 app/main.py
-# (aus deinem bisherigen main.py)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.api.routes import router as api_router
+
 from fastapi_utils.tasks import repeat_every
-from app.core.feeds import fetch_articles
-from app.models import save_articles
+
+# API-Router
+from app.api.routes import router as api_router
 from app.api.visuals import router as visuals_router
 
+# Feeds (liefert ArticleSchema-Objekte)
+from app.core.feeds import fetch_articles
 
+# ORM / DB / Repository
+from app.database import Base, engine, SessionLocal
+from app.models_sql import ArticleORM  # sicherstellen, dass das Model registriert ist
+from app.repositories.articles import bulk_upsert_articles
 
 
 app = FastAPI()
 
+# --- CORS ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,16 +30,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
-@repeat_every(seconds=1800)  # alle 30 Minuten
-def scheduled_refresh() -> None:
-    print("[INFO] ⏱ Auto-refresh gestartet...")
-    articles = fetch_articles()
-    save_articles(articles)
-    print(f"[INFO] ✅ {len(articles)} Artikel aktualisiert.")
-
-
+# --- Static files ---
 app.mount("/ui", StaticFiles(directory="app/static", html=True), name="static")
 
+# --- Router ---
 app.include_router(api_router)
 app.include_router(visuals_router)
+
+
+# --- Tabellen anlegen (einmalig beim Start, falls keine Migrationen verwendet werden) ---
+@app.on_event("startup")
+def create_tables() -> None:
+    Base.metadata.create_all(bind=engine)
+    print("[INFO] 📦 Datenbanktabellen geprüft/erstellt.")
+
+
+# --- Geplanter Refresh-Job (alle 30 Minuten) ---
+@app.on_event("startup")
+@repeat_every(seconds=1800)  # 30 Minuten
+def scheduled_refresh() -> None:
+    print("[INFO] ⏱ Auto-Refresh gestartet...")
+    items = fetch_articles()  # -> List[ArticleSchema]
+    with SessionLocal() as db:
+        try:
+            count = bulk_upsert_articles(db, items)
+            print(f"[INFO] ✅ {count} neue Artikel gespeichert (Duplikate wurden ignoriert).")
+        except Exception as e:
+            print(f"[ERROR] Refresh fehlgeschlagen: {e}")
+            raise
