@@ -140,6 +140,27 @@
   <div id="keywordTopAbsoluteColumns" class="keyword-columns"></div>
 </section>
 
+<section id="blindspotFeed" class="blindspot-feed">
+  <h2>🕳️ Blindspot-Feed (Keyword-basiert)</h2>
+  <div class="blindspot-grid">
+    <div class="blindspot-col" id="feedKritisch">
+      <h3>Kaum systemkritisch</h3>
+      <ul></ul>
+    </div>
+    <div class="blindspot-col" id="feedNah">
+      <h3>Kaum systemnah</h3>
+      <ul></ul>
+    </div>
+    <div class="blindspot-col" id="feedNational">
+      <h3>Kaum nationalistisch</h3>
+      <ul></ul>
+    </div>
+    <div class="blindspot-col" id="feedGlobal">
+      <h3>Kaum globalistisch</h3>
+      <ul></ul>
+    </div>
+  </div>
+</section>
 
 
 <section id="keywordTrends" class="trend-section trends--minimal">
@@ -162,6 +183,10 @@
 
   <div id="filteredArticles"></div>
 
+<section class="chart-box">
+  <h2>🧭 Keyword-Verteilung (X/Y)</h2>
+  <div id="keywordSides"></div>
+</section>
 
 
 
@@ -274,20 +299,36 @@
 
 
 
+async function searchByKeyword(kw = null) {
+  const keyword = kw || document.getElementById("keywordInput").value.trim();
+  if (!keyword) return;
 
+  filters.keyword = keyword;
+  selectedKeyword = keyword;
 
-    async function searchByKeyword(kw = null) {
-      const keyword = kw || document.getElementById("keywordInput").value.trim();
-      if (!keyword) return;
+  loadFilteredArticles();
+  loadExtremeBubbles();
+  renderKeywordTimeline(keyword);
+  loadBlindspotFeed();
 
-      filters.keyword = keyword;
-      selectedKeyword = keyword;
-      loadFilteredArticles();
-      loadExtremeBubbles();
-      renderKeywordTimeline(keyword);
+  // --- NEU/robust ---
+  const box = document.getElementById("keywordSides");
+  if (!box) return;                  // falls der Container im HTML noch fehlt
+  box.innerHTML = "";                // alten Inhalt leeren
 
+  try {
+    const sides = await loadKeywordSides(keyword);
+    if (sides) {
+      renderKeywordSidesBars(box, sides);
+      // optional: box.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else {
+      box.textContent = "Keine Daten für dieses Keyword im aktuellen Zeitfenster.";
     }
-
+  } catch (err) {
+    console.error(err);
+    box.textContent = "Fehler beim Laden der Verteilung.";
+  }
+}
 
 
     function renderHeadlineList(articles) {
@@ -423,6 +464,7 @@ async function loadTopAbsoluteKeywords() {
     loadFilteredMediaCompass();
     updateFilterDisplay();
     updateURLFromFilters && updateURLFromFilters(); // falls vorhanden
+    loadBlindspotFeed();
   }
 
   // Setter für den Bias-Filter: setzt den Filter und triggert die Aktualisierung
@@ -455,6 +497,69 @@ async function loadTopAbsoluteKeywords() {
       default:                 return true;
     }
   }
+
+
+  async function loadKeywordSides(word) {
+    const url = `/keywords/sides?word=${encodeURIComponent(word)}&hours=${filters.hours}` + (filters.teaser ? "&teaser=true" : "");
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return res.json();
+  }
+
+
+  function renderKeywordSidesBars(container, data) {
+  container.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "spectrum";
+
+  const makeBar = (axisCounts, leftKey, rightKey, labelText) => {
+    const total = axisCounts.total || 1;
+
+    const row   = document.createElement("div"); row.className = "spectrum__row";
+    const label = document.createElement("div"); label.className = "spectrum__label";
+    label.textContent = labelText;
+
+    const bar   = document.createElement("div"); bar.className = "spectrum__bar";
+
+    const parts = [
+      { cls: "spectrum__seg spectrum__seg--left",   key: leftKey,  val: axisCounts[leftKey] },
+      { cls: "spectrum__seg spectrum__seg--center", key: "neutral", val: axisCounts.neutral },
+      { cls: "spectrum__seg spectrum__seg--right",  key: rightKey, val: axisCounts[rightKey] },
+    ];
+
+    parts.forEach(p => {
+      const seg = document.createElement("div");
+      seg.className = p.cls;
+      seg.style.flex = String(p.val);                        // Proportionen
+      seg.style.minWidth = p.val === 0 ? "0px" : "2px";      // dünne Segmente sichtbar halten
+      const pct = Math.round((p.val / total) * 100);
+      seg.textContent = `${p.key === "neutral" ? "C" : p.key} ${pct}%`;
+      bar.appendChild(seg);
+    });
+
+    row.appendChild(label);
+    row.appendChild(bar);
+    return row;
+  };
+
+  wrap.appendChild(makeBar(data.counts.x, "kritisch", "nah", "Systemkritisch — Neutral — Systemnah"));
+  if (data.blindspots?.x) {
+    const badge = document.createElement("div");
+    badge.className = "spectrum__badge";
+    badge.textContent = `Blindspot (X): ${data.blindspots.x}`;
+    wrap.appendChild(badge);
+  }
+
+  wrap.appendChild(makeBar(data.counts.y, "national", "global", "Nationalistisch — Neutral — Globalistisch"));
+  if (data.blindspots?.y) {
+    const badge = document.createElement("div");
+    badge.className = "spectrum__badge";
+    badge.textContent = `Blindspot (Y): ${data.blindspots.y}`;
+    wrap.appendChild(badge);
+  }
+
+  container.appendChild(wrap);
+}
 
 
 
@@ -806,7 +911,12 @@ function renderKeywordScatterChart(bubbles) {
       plugins: {
         tooltip: {
           callbacks: {
-            label: ctx => `${ctx.raw.label} (${ctx.raw.r.toFixed(1)} Radius)`
+            label: (ctx) => {
+              const raw = ctx.raw || {};
+              // statt r (Radius) die echte Anzahl anzeigen
+              const count = raw.count ?? raw.value ?? 0;
+              return `Artikel: ${count}`;
+            },
           }
         }
       },
@@ -934,6 +1044,68 @@ async function renderKeywordTimeline(keyword) {
 }
 
 
+
+  async function loadBlindspotFeed() {
+    const url = `/blindspots/keywords-feed?hours=${filters.hours}&min_total=3&ratio_max=0.20`
+               + (filters.teaser ? "&teaser=true" : "");
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderBlindspotFeed(data);
+  }
+
+function renderBlindspotFeed(data) {
+  const cfg = [
+    { key: "systemkritisch",  el: "#feedKritisch",  label: "systemkritisch",  ratioKey: "kritisch" },
+    { key: "systemnah",       el: "#feedNah",       label: "systemnah",       ratioKey: "nah" },
+    { key: "nationalistisch", el: "#feedNational",  label: "nationalistisch", ratioKey: "national" },
+    { key: "globalistisch",   el: "#feedGlobal",    label: "globalistisch",   ratioKey: "global" },
+  ];
+
+  for (const { key, el, label, ratioKey } of cfg) {
+    const col = document.querySelector(`${el} ul`);
+    if (!col) continue;
+    col.innerHTML = "";
+
+    const items = data?.items?.[key] || [];
+    if (!items.length) {
+      const li = document.createElement("li");
+      li.className = "empty";
+      li.textContent = "— keine Blindspots im Fenster —";
+      col.appendChild(li);
+      continue;
+    }
+
+    for (const it of items) {
+      const li = document.createElement("li");
+      li.className = "feed-item";
+
+      const btn = document.createElement("button");
+      btn.className = "linklike";
+      btn.textContent = it.word;
+      btn.onclick = () => searchByKeyword(it.word);
+
+      const badge = document.createElement("span");
+      badge.className = "blindspot-badge";
+      const ratio = Number(it.ratios?.[ratioKey]) || 0;
+      const pct   = Math.round(ratio * 100);
+      const zero  = it.zero_badge?.[ratioKey] === true;
+      badge.textContent = zero ? `0 % ${label}` : `≤ ${pct}% ${label}`;
+
+      const meta = document.createElement("span");
+      meta.className = "meta";
+      meta.textContent = `(${it.total} Erwähnungen, ${it.sources} Quellen)`;
+
+      li.appendChild(btn);
+      li.appendChild(badge);
+      li.appendChild(meta);
+      col.appendChild(li);
+    }
+  }
+}
+
+
+
 function getFiltersFromURL() {
   const params = new URLSearchParams(window.location.search);
 
@@ -979,6 +1151,7 @@ function updateURLFromFilters() {
 
       if (filters.keyword) {
       renderKeywordTimeline(filters.keyword);
+      loadBlindspotFeed();
       }
       }
 
@@ -991,6 +1164,7 @@ function updateURLFromFilters() {
       loadFilteredMediaCompass();
       updateFilterDisplay();
       updateURLFromFilters();
+      loadBlindspotFeed();
     });
 
 
@@ -1004,6 +1178,7 @@ function updateURLFromFilters() {
       loadFilteredMediaCompass();
       updateFilterDisplay();
       updateURLFromFilters();
+      loadBlindspotFeed();
 
 
 
@@ -1027,6 +1202,8 @@ function updateURLFromFilters() {
       loadKeywordTrends();        // 🔼 Trends laden
       loadExtremeBubbles();       // 🫧 Randmedienbegriffe laden
       loadTopAbsoluteKeywords();
+      loadBlindspotFeed();
+
     };
     window.searchByKeyword = searchByKeyword;
 

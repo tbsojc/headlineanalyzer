@@ -561,3 +561,214 @@ def headlines_words(
 
     # Array-Form für die UI
     return sorted([[w, n] for w, n in c.items()], key=lambda x: x[1], reverse=True)
+
+# --- NEU: Keyword-Seitenzählung (X/Y) als einfache Balken ---
+@router.get("/keywords/sides")
+def keyword_sides(
+    word: str,
+    hours: int = Query(72),
+    teaser: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    import re
+    from collections import Counter
+
+    # Schwelle für "Seiten" vs. Neutral
+    T = 0.33
+
+    keyword = word.strip().lower()
+    if not keyword:
+        return {"error": "word required"}
+
+    # Zeitraum: wie überall
+    articles = get_articles_last_hours(db, hours)
+
+    # Keyword-Match (wie in /articles/filtered)
+    patt = re.compile(rf"\b{re.escape(keyword)}\b")
+    def match(a):
+        if patt.search(a.title.lower()): return True
+        if teaser and a.teaser and patt.search(a.teaser.lower()): return True
+        return False
+
+    matched = [a for a in articles if match(a)]
+    if not matched:
+        return {
+            "word": word, "hours": hours, "t": T,
+            "counts": {"x": {"kritisch":0,"neutral":0,"nah":0,"total":0},
+                       "y": {"national":0,"neutral":0,"global":0,"total":0}},
+            "blindspots": {"x": None, "y": None}
+        }
+
+    # Medienkompass laden und auf normierten Namen mappen
+    df = load_media_df()  # nutzt deine CSV
+    bias_map = {row["norm_name"]: (row["Systemnähe (X)"], row["Globalismus (Y)"])
+                for _, row in df.iterrows()}
+
+    # Zählen je Achse
+    x_counts = Counter(); y_counts = Counter()
+    for a in matched:
+        norm = norm_source(a.source)
+        if norm not in bias_map:
+            continue
+        x, y = bias_map[norm]
+        # X
+        if x <= -T: x_counts["kritisch"] += 1
+        elif x >=  T: x_counts["nah"] += 1
+        else: x_counts["neutral"] += 1
+        # Y
+        if y <= -T: y_counts["national"] += 1
+        elif y >=  T: y_counts["global"] += 1
+        else: y_counts["neutral"] += 1
+
+    x_total = sum(x_counts.values())
+    y_total = sum(y_counts.values())
+
+    counts = {
+        "x": {"kritisch": x_counts["kritisch"], "neutral": x_counts["neutral"], "nah": x_counts["nah"], "total": x_total},
+        "y": {"national": y_counts["national"], "neutral": y_counts["neutral"], "global": y_counts["global"], "total": y_total},
+    }
+
+    # Super-simpler Blindspot: „Gegenseite 0 und dies >= 3“ oder „Gegenseite <= 10%“
+    MIN_COUNT = 3
+    RATIO_MAX = 0.1
+
+    def blind(axis_counts, left_key, right_key):
+        L = axis_counts[left_key]; R = axis_counts[right_key]
+        if axis_counts["total"] < MIN_COUNT:  # zu wenig Daten? Keine Markierung.
+            return None
+        if R == 0 and L >= MIN_COUNT: return f"{right_key} fehlt"
+        if L == 0 and R >= MIN_COUNT: return f"{left_key} fehlt"
+        if L > 0 and R > 0:
+            if R/(L+1e-6) <= RATIO_MAX and L >= MIN_COUNT: return f"{right_key} extrem selten"
+            if L/(R+1e-6) <= RATIO_MAX and R >= MIN_COUNT: return f"{left_key} extrem selten"
+        return None
+
+    blindspots = {
+        "x": blind(counts["x"], "kritisch", "nah"),
+        "y": blind(counts["y"], "national", "global"),
+    }
+
+    return {"word": word, "hours": hours, "t": T, "counts": counts, "blindspots": blindspots}
+
+
+# --- Blindspot-Feed (Variante B): vier Listen je Richtung ---
+@router.get("/blindspots/keywords-feed")
+def blindspot_keywords_feed(
+    hours: int = Query(72),
+    min_total: int = Query(10),
+    ratio_max: float = Query(0.05),  # 5% = "kaum"
+    top_n: int = Query(10),
+    teaser: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    """
+    Liefert vier Listen: kaum systemkritisch / systemnah / nationalistisch / globalistisch.
+    Kriterium: Anteil der jeweiligen Seite <= ratio_max UND Gesamt-Nennungen >= min_total.
+    Sortierung: zuerst nach kleinstem Anteil, dann nach Gesamt-Nennungen.
+    """
+    from collections import defaultdict
+    from app.core.clean_utils import extract_relevant_words
+
+    # Schwelle zur Seiten-Bucketisierung (wie in /keywords/sides)
+    T = 0.33
+
+    # Medien-Bias laden (wie in /keywords/bias-vector)
+    df = load_media_df()
+    bias_map = {
+        row["norm_name"]: (row["Systemnähe (X)"], row["Globalismus (Y)"])
+        for _, row in df.iterrows()
+    }
+
+    # Artikel-Zeitfenster
+    articles = get_articles_last_hours(db, hours)
+
+    # Zählcontainer: je Keyword sammeln wir alle (x,y)-Punkte und Quellen
+    coords_by_word = defaultdict(list)
+    sources_by_word = defaultdict(set)
+
+    for a in articles:
+        norm = norm_source(a.source)
+        if norm not in bias_map:
+            continue
+        x, y = bias_map[norm]
+        words = extract_relevant_words(a.title)
+        if teaser and a.teaser:
+            # denselben Extractor auch für Teaser verwenden
+            words |= extract_relevant_words(a.teaser)
+        for w in words:
+            coords_by_word[w].append((x, y))
+            sources_by_word[w].add(norm)
+
+    # Hilfszähler für Achsen-Buckets
+    def counts_for(coords):
+        xk = xn = xr = 0  # kritisch, neutral, nah
+        yn = yc = yg = 0  # national, neutral, global
+        for x, y in coords:
+            # X
+            if x <= -T: xk += 1
+            elif x >= T: xr += 1
+            else: xn += 1
+            # Y
+            if y <= -T: yn += 1
+            elif y >= T: yg += 1
+            else: yc += 1
+        total = len(coords)
+        return (
+            {"kritisch": xk, "neutral": xn, "nah": xr, "total": total},
+            {"national": yn, "neutral": yc, "global": yg, "total": total},
+        )
+
+    # Vier Ergebnislisten
+    L_kritisch, L_nah, L_national, L_global = [], [], [], []
+
+    for w, coords in coords_by_word.items():
+        if len(coords) < min_total:
+            continue
+        x_counts, y_counts = counts_for(coords)
+        total = x_counts["total"] or 1
+
+        # Anteile
+        p_krit = x_counts["kritisch"] / total
+        p_nah  = x_counts["nah"]      / total
+        p_nat  = y_counts["national"] / total
+        p_glo  = y_counts["global"]   / total
+
+        item = {
+            "word": w,
+            "counts": {"x": x_counts, "y": y_counts},
+            "sources": len(sources_by_word[w]),
+            "total": total,
+            "ratios": {
+                "kritisch": round(p_krit, 3),
+                "nah": round(p_nah, 3),
+                "national": round(p_nat, 3),
+                "global": round(p_glo, 3),
+            },
+            # Badges für 0%-Fälle (nice-to-have für UI)
+            "zero_badge": {
+                "kritisch": x_counts["kritisch"] == 0,
+                "nah":      x_counts["nah"]      == 0,
+                "national": y_counts["national"] == 0,
+                "global":   y_counts["global"]   == 0,
+            }
+        }
+
+        # Einordnen nach "kaum"-Kriterium
+        if p_krit <= ratio_max: L_kritisch.append(item)
+        if p_nah  <= ratio_max: L_nah.append(item)
+        if p_nat  <= ratio_max: L_national.append(item)
+        if p_glo  <= ratio_max: L_global.append(item)
+
+    # Sortierung: kleinster Anteil zuerst, dann total absteigend
+    def sort_list(lst, key_name):
+        return sorted(lst, key=lambda it: (it["ratios"][key_name], -it["total"]))[:top_n]
+
+    return {
+        "params": {"hours": hours, "min_total": min_total, "ratio_max": ratio_max, "top_n": top_n},
+        "items": {
+            "systemkritisch": sort_list(L_kritisch, "kritisch"),
+            "systemnah":      sort_list(L_nah,      "nah"),
+            "nationalistisch":sort_list(L_national, "national"),
+            "globalistisch":  sort_list(L_global,   "global"),
+        }
+    }
