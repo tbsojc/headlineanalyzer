@@ -462,9 +462,10 @@ async function loadTopAbsoluteKeywords() {
     loadKeywordTrends();
     loadWordcloud();
     loadFilteredMediaCompass();
+    loadBlindspotFeed();
     updateFilterDisplay();
     updateURLFromFilters && updateURLFromFilters(); // falls vorhanden
-    loadBlindspotFeed();
+
   }
 
   // Setter für den Bias-Filter: setzt den Filter und triggert die Aktualisierung
@@ -859,6 +860,7 @@ function resetFilters() {
   loadFilteredArticles();
   loadExtremeBubbles();
   loadTopAbsoluteKeywords();
+  loadBlindspotFeed();
 
 }
 
@@ -876,12 +878,13 @@ function renderKeywordScatterChart(bubbles) {
   canvas.height = canvas.clientHeight;
 
   const data = bubbles
-    .filter(b => b.bias && b.count >= 3)
+    .filter(b => b.bias && b.count >= 15)
     .map(b => ({
       x: b.bias.x,
       y: b.bias.y,
       r: Math.min(3 + Math.sqrt(b.count), 15),
       label: b.word,
+      count: b.count,
       backgroundColor: b.word === filters.keyword ? "#ef4444" : "#2563eb"
     }));
 
@@ -1000,15 +1003,26 @@ async function showKeywordHeatOverlay(keyword) {
   // optional: neue Bubble-Daten laden und zeichnen
   loadExtremeBubbles(); // <- ruft renderKeywordScatterChart() intern auf
 }
-
 async function renderKeywordTimeline(keyword) {
   const res = await fetch(`/keywords/timeline?word=${encodeURIComponent(keyword)}&hours=${filters.hours}`);
   const data = await res.json();
 
+  // Labels & Werte wie gehabt
   const labels = data.map(d => new Date(d.time).toLocaleString("de-DE", {
     day: "2-digit", month: "2-digit", hour: "2-digit"
   }));
   const values = data.map(d => d.count);
+
+  // 🔎 NEU: Medien je Zeitbucket extrahieren (flexibel: sources[] ODER articles[].source)
+  const mediaByIndex = data.map(d => {
+    let list = [];
+    if (Array.isArray(d.sources)) list = d.sources;
+    else if (Array.isArray(d.articles)) list = d.articles.map(a => a.source).filter(Boolean);
+    // deduplizieren & sortieren
+    const uniq = Array.from(new Set(list));
+    // Optional: sortiere nach Häufigkeit, falls counts vorhanden sind
+    return uniq.sort((a, b) => a.localeCompare(b, "de"));
+  });
 
   const ctx = document.getElementById("timelineChart").getContext("2d");
 
@@ -1019,25 +1033,50 @@ async function renderKeywordTimeline(keyword) {
   keywordTimelineChart = new Chart(ctx, {
     type: 'line',
     data: {
-      labels: labels,
+      labels,
       datasets: [{
         label: `📈 Verlauf: ${keyword}`,
         data: values,
         fill: false,
         borderColor: "#3b82f6",
-        tension: 0.3
+        tension: 0.3,
+        pointRadius: 3,
+        pointHoverRadius: 5,
       }]
     },
     options: {
       responsive: true,
-      scales: {
-        x: {
-          title: { display: true, text: 'Zeit' }
+      interaction: { mode: 'nearest', intersect: false },
+      plugins: {
+        tooltip: {
+          callbacks: {
+            // Titel = Zeitstempel
+            title: (items) => items?.[0]?.label ?? "",
+            // Hauptzeile = Nennungen gesamt
+            label: (ctx) => `Nennungen: ${ctx.parsed.y}`,
+            // 🔔 NEU: Liste der Medien darunter
+            afterBody: (items) => {
+              const idx = items?.[0]?.dataIndex ?? -1;
+              if (idx < 0) return [];
+              const media = mediaByIndex[idx] || [];
+              if (!media.length) return [];
+              const MAX = 12; // nicht zu lang machen
+              const head = "Medien:";
+              if (media.length <= MAX) {
+                return [head, ...media.map(m => `• ${m}`)];
+              }
+              // Falls sehr viele: die ersten N + „… und X weitere“
+              const shown = media.slice(0, MAX);
+              const rest = media.length - MAX;
+              return [head, ...shown.map(m => `• ${m}`), `… und ${rest} weitere`];
+            }
+          }
         },
-        y: {
-          beginAtZero: true,
-          title: { display: true, text: 'Nennungen' }
-        }
+        legend: { display: true }
+      },
+      scales: {
+        x: { title: { display: true, text: 'Zeit' } },
+        y: { beginAtZero: true, title: { display: true, text: 'Nennungen' } }
       }
     }
   });
@@ -1045,14 +1084,22 @@ async function renderKeywordTimeline(keyword) {
 
 
 
-  async function loadBlindspotFeed() {
-    const url = `/blindspots/keywords-feed?hours=${filters.hours}&min_total=3&ratio_max=0.20`
-               + (filters.teaser ? "&teaser=true" : "");
-    const res = await fetch(url);
-    if (!res.ok) return;
-    const data = await res.json();
-    renderBlindspotFeed(data);
-  }
+
+async function loadBlindspotFeed() {
+  const hours =
+    Number(filters.hours) ||
+    Number(document.querySelector('[data-hours].active')?.dataset.hours) ||
+    72;
+
+  const url = `/blindspots/keywords-feed?hours=${hours}&min_total=5&ratio_max=0.20`
+            + (filters.teaser ? "&teaser=true" : "");
+
+  const res = await fetch(url, { cache: "no-store" }); // verhindert Browser-Cache
+  if (!res.ok) return;
+  const data = await res.json();
+  renderBlindspotFeed(data);
+}
+
 
 function renderBlindspotFeed(data) {
   const cfg = [
@@ -1151,8 +1198,8 @@ function updateURLFromFilters() {
 
       if (filters.keyword) {
       renderKeywordTimeline(filters.keyword);
-      loadBlindspotFeed();
       }
+      loadBlindspotFeed();
       }
 
     // Event-Listener für die Quellen-Auswahl
@@ -1261,6 +1308,7 @@ function renderActiveFilterChips(){
       loadTopAbsoluteKeywords();
       loadFilteredMediaCompass();
       updateURLFromFilters();
+      loadBlindspotFeed();
       renderActiveFilterChips();
     }
   }, { removable: filters.hours !== 72 });
@@ -1307,6 +1355,7 @@ function renderActiveFilterChips(){
       loadFilteredMediaCompass();
       updateURLFromFilters();
       renderActiveFilterChips();
+      loadBlindspotFeed();
     });
   }
 

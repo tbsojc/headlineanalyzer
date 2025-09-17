@@ -460,31 +460,52 @@ def keyword_bias_vector(hours: int = 72, db: Session = Depends(get_db)):
 
 
 @router.get("/keywords/timeline")
-def keyword_timeline(word: str, hours: int = 72, db: Session = Depends(get_db)):
+def keyword_timeline(
+    word: str,
+    hours: int = 72,
+    teaser: bool = Query(False),
+    db: Session = Depends(get_db)
+):
     from collections import defaultdict
     from app.core.clean_utils import extract_relevant_words
+    import re
 
-    # Aktueller Zeitpunkt (abgerundet zur vollen Stunde)
+    # Zeitfenster
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     start = now - timedelta(hours=hours)
+    slots = [start + timedelta(hours=i) for i in range(hours + 1)]
 
-    # Stündliche Zeitintervalle vorbereiten
-    time_slots = [start + timedelta(hours=i) for i in range(hours + 1)]
-
-    # Keyword
-    word = word.lower()
+    # Keyword & Artikel
+    keyword = word.lower().strip()
+    patt = re.compile(rf"\b{re.escape(keyword)}\b")
     articles = get_articles_last_hours(db, hours)
 
-    # Zähle Treffer pro Stunde
-    bins = defaultdict(int)
-    for a in articles:
-        ts = a.published_at.replace(minute=0, second=0, microsecond=0)
-        words = extract_relevant_words(a.title)
-        if word in words:
-            bins[ts] += 1
+    # Buckets: count + sources
+    counts = defaultdict(int)
+    sources = defaultdict(set)
 
-    result = [{"time": t.isoformat(), "count": bins.get(t, 0)} for t in time_slots]
-    return result
+    for a in articles:
+        # Match-Logik wie in /articles/filtered
+        title_ok = patt.search(a.title.lower()) or (keyword in extract_relevant_words(a.title))
+        teaser_ok = False
+        if teaser and a.teaser:
+            teaser_ok = patt.search(a.teaser.lower())
+        if not (title_ok or teaser_ok):
+            continue
+
+        ts = a.published_at.replace(minute=0, second=0, microsecond=0)
+        counts[ts] += 1
+        if a.source:
+            sources[ts].add(a.source.strip())
+
+    return [
+        {
+            "time": t.isoformat(),
+            "count": counts.get(t, 0),
+            "sources": sorted(list(sources.get(t, set())))
+        }
+        for t in slots
+    ]
 
 
 @router.get("/keywords/top-absolute")
@@ -657,7 +678,7 @@ def blindspot_keywords_feed(
     hours: int = Query(72),
     min_total: int = Query(10),
     ratio_max: float = Query(0.05),  # 5% = "kaum"
-    top_n: int = Query(10),
+    top_n: int = Query(25),
     teaser: bool = Query(False),
     db: Session = Depends(get_db),
 ):
@@ -670,7 +691,7 @@ def blindspot_keywords_feed(
     from app.core.clean_utils import extract_relevant_words
 
     # Schwelle zur Seiten-Bucketisierung (wie in /keywords/sides)
-    T = 0.33
+    T = 0.20
 
     # Medien-Bias laden (wie in /keywords/bias-vector)
     df = load_media_df()
