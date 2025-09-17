@@ -640,7 +640,6 @@ def headlines_words(
     return sorted([[w, n] for w, n in c.items()], key=lambda x: x[1], reverse=True)
 
 
-# --- NEU: Keyword-Seitenzählung (X/Y) als einfache Balken ---
 @router.get("/keywords/sides")
 def keyword_sides(
     word: str,
@@ -648,27 +647,49 @@ def keyword_sides(
     teaser: bool = Query(False),
     db: Session = Depends(get_db),
 ):
+    """
+    Verteilung (X/Y) für 1..3 Terme.
+    Mehrere Terme mit '+' trennen, z. B.:
+      - 'ukraine+frieden'
+      - 'ukraine+selensky+frieden'
+    Ein Artikel zählt, wenn **alle** Terme im Titel (oder optional Teaser) vorkommen.
+    Matching: Wortgrenzen-Regex ODER Token-Set aus extract_relevant_words (Stopwörter bleiben ausgeschlossen).
+    """
     import re
     from collections import Counter
+    from app.core.clean_utils import extract_relevant_words
 
-    # Schwelle für "Seiten" vs. Neutral
+    # Schwelle für "Seiten" vs. Neutral (wie bisher)
     T = 0.33
 
-    keyword = word.strip().lower()
-    if not keyword:
+    # Terme vorbereiten
+    terms = [t.strip().lower() for t in (word or "").split("+") if t.strip()]
+    if not terms:
         return {"error": "word required"}
+    patterns = [re.compile(rf"\b{re.escape(t)}\b") for t in terms]
 
-    # Zeitraum: wie überall
+    # Zeitraum
     articles = get_articles_last_hours(db, hours)
 
-    # Keyword-Match (wie in /articles/filtered)
-    patt = re.compile(rf"\b{re.escape(keyword)}\b")
-    def match(a):
-        if patt.search(a.title.lower()): return True
-        if teaser and a.teaser and patt.search(a.teaser.lower()): return True
-        return False
+    # Artikel-Matching: alle Terme müssen getroffen werden
+    matched = []
+    for a in articles:
+        title_l  = (a.title or "").lower()
+        teaser_l = (a.teaser or "").lower() if (teaser and a.teaser) else ""
 
-    matched = [a for a in articles if match(a)]
+        tokens_title  = set(extract_relevant_words(a.title))
+        tokens_teaser = set(extract_relevant_words(a.teaser)) if (teaser and a.teaser) else set()
+
+        ok = True
+        for i, term in enumerate(terms):
+            hit_title  = bool(patterns[i].search(title_l))  or (term in tokens_title)
+            hit_teaser = bool(patterns[i].search(teaser_l)) or (term in tokens_teaser) if teaser else False
+            if not (hit_title or hit_teaser):
+                ok = False
+                break
+        if ok:
+            matched.append(a)
+
     if not matched:
         return {
             "word": word, "hours": hours, "t": T,
@@ -677,8 +698,8 @@ def keyword_sides(
             "blindspots": {"x": None, "y": None}
         }
 
-    # Medienkompass laden und auf normierten Namen mappen
-    df = load_media_df()  # nutzt deine CSV
+    # Medienkompass laden und auf normierte Namen mappen
+    df = load_media_df()
     bias_map = {row["norm_name"]: (row["Systemnähe (X)"], row["Globalismus (Y)"])
                 for _, row in df.iterrows()}
 
@@ -689,31 +710,26 @@ def keyword_sides(
         if norm not in bias_map:
             continue
         x, y = bias_map[norm]
-        # X
+        # X-Achse
         if x <= -T: x_counts["kritisch"] += 1
         elif x >=  T: x_counts["nah"] += 1
         else: x_counts["neutral"] += 1
-        # Y
+        # Y-Achse
         if y <= -T: y_counts["national"] += 1
         elif y >=  T: y_counts["global"] += 1
         else: y_counts["neutral"] += 1
 
-    x_total = sum(x_counts.values())
-    y_total = sum(y_counts.values())
-
     counts = {
-        "x": {"kritisch": x_counts["kritisch"], "neutral": x_counts["neutral"], "nah": x_counts["nah"], "total": x_total},
-        "y": {"national": y_counts["national"], "neutral": y_counts["neutral"], "global": y_counts["global"], "total": y_total},
+        "x": {"kritisch": x_counts["kritisch"], "neutral": x_counts["neutral"], "nah": x_counts["nah"], "total": sum(x_counts.values())},
+        "y": {"national": y_counts["national"], "neutral": y_counts["neutral"], "global": y_counts["global"], "total": sum(y_counts.values())},
     }
 
-    # Super-simpler Blindspot: „Gegenseite 0 und dies >= 3“ oder „Gegenseite <= 10%“
+    # Einfache Blindspot-Heuristik (wie bisher)
     MIN_COUNT = 3
     RATIO_MAX = 0.1
-
     def blind(axis_counts, left_key, right_key):
-        L = axis_counts[left_key]; R = axis_counts[right_key]
-        if axis_counts["total"] < MIN_COUNT:  # zu wenig Daten? Keine Markierung.
-            return None
+        L = axis_counts[left_key]; R = axis_counts[right_key]; total = axis_counts["total"]
+        if total < MIN_COUNT: return None
         if R == 0 and L >= MIN_COUNT: return f"{right_key} fehlt"
         if L == 0 and R >= MIN_COUNT: return f"{left_key} fehlt"
         if L > 0 and R > 0:
@@ -727,6 +743,7 @@ def keyword_sides(
     }
 
     return {"word": word, "hours": hours, "t": T, "counts": counts, "blindspots": blindspots}
+
 
 @router.get("/blindspots/keywords-feed")
 def blindspot_keywords_feed(
