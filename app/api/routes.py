@@ -249,16 +249,18 @@ def filtered_articles(
         articles = [a for a in articles if a.source.strip().lower() == s]
 
     if keyword:
-        pattern = re.compile(rf"\b{re.escape(keyword.lower())}\b")
+        # "ukraine + frieden" => beide Begriffe müssen vorkommen
+        terms = [t.strip().lower() for t in keyword.split('+') if t.strip()]
 
         def match(a):
-            if pattern.search(a.title.lower()):
-                return True
-            if teaser and a.teaser and pattern.search(a.teaser.lower()):
-                return True
-            return False
+            txt = a.title.lower()
+            if teaser and a.teaser:
+                txt += " " + a.teaser.lower()
+            import re
+            return all(re.search(rf"\b{re.escape(t)}\b", txt) for t in terms)
 
         articles = [a for a in articles if match(a)]
+
 
     return [ArticleSchema.model_validate(a) for a in articles]
 
@@ -283,15 +285,17 @@ def media_positions_filtered(
         articles = [a for a in articles if a.source.strip().lower() == source.strip().lower()]
 
     if keyword:
-        pattern = rf"\b{re.escape(keyword.lower())}\b"
-        articles = [
-            a
-            for a in articles
-            if (
-                re.search(pattern, a.title.lower())
-                or (teaser and a.teaser and re.search(pattern, a.teaser.lower()))
-            )
-        ]
+        terms = [t.strip().lower() for t in keyword.split('+') if t.strip()]
+
+        def match(a):
+            txt = a.title.lower()
+            if teaser and a.teaser:
+                txt += " " + a.teaser.lower()
+            import re
+            return all(re.search(rf"\b{re.escape(t)}\b", txt) for t in terms)
+
+        articles = [a for a in articles if match(a)]
+
 
     matching_sources = [a.source.strip().lower() for a in articles]
     source_counts = Counter(matching_sources)
@@ -458,7 +462,6 @@ def keyword_bias_vector(hours: int = 72, db: Session = Depends(get_db)):
 
     return result
 
-
 @router.get("/keywords/timeline")
 def keyword_timeline(
     word: str,
@@ -466,33 +469,53 @@ def keyword_timeline(
     teaser: bool = Query(False),
     db: Session = Depends(get_db)
 ):
+    """
+    Zählt pro Stunde die Headlines, die ALLE Terme aus `word` enthalten.
+    Mehrere Terme mit '+' trennen, z. B.:
+      - 'ukraine+frieden'  (2)
+      - 'ukraine+selensky+frieden' (3)
+    Stopwords bleiben draußen (extract_relevant_words).
+    Antwort enthält je Bucket eine deduplizierte Quellenliste (sources) für Tooltips.
+    """
     from collections import defaultdict
     from app.core.clean_utils import extract_relevant_words
     import re
 
-    # Zeitfenster
+    # Zeitfenster (volle Stunden)
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     start = now - timedelta(hours=hours)
     slots = [start + timedelta(hours=i) for i in range(hours + 1)]
 
-    # Keyword & Artikel
-    keyword = word.lower().strip()
-    patt = re.compile(rf"\b{re.escape(keyword)}\b")
+    # Terme vorbereiten
+    raw = (word or "").strip().lower()
+    terms = [t.strip() for t in raw.split("+") if t.strip()]
+    if not terms:
+        return [{"time": t.isoformat(), "count": 0, "sources": []} for t in slots]
+
+    patterns = [re.compile(rf"\b{re.escape(t)}\b") for t in terms]
+
     articles = get_articles_last_hours(db, hours)
 
-    # Buckets: count + sources
+    # Buckets
     counts = defaultdict(int)
     sources = defaultdict(set)
 
-    for a in articles:
-        # Match-Logik wie in /articles/filtered
-        title_ok = patt.search(a.title.lower()) or (keyword in extract_relevant_words(a.title))
-        teaser_ok = False
-        if teaser and a.teaser:
-            teaser_ok = patt.search(a.teaser.lower())
-        if not (title_ok or teaser_ok):
-            continue
+    def matches_all(a) -> bool:
+        title_l = a.title.lower()
+        teaser_l = (a.teaser or "").lower()
+        tokens_title = set(extract_relevant_words(a.title))
+        tokens_teaser = set(extract_relevant_words(a.teaser)) if (teaser and a.teaser) else set()
 
+        for i, term in enumerate(terms):
+            in_title = bool(patterns[i].search(title_l)) or (term in tokens_title)
+            in_teasr = bool(patterns[i].search(teaser_l)) or (term in tokens_teaser) if teaser else False
+            if not (in_title or in_teasr):
+                return False
+        return True
+
+    for a in articles:
+        if not matches_all(a):
+            continue
         ts = a.published_at.replace(minute=0, second=0, microsecond=0)
         counts[ts] += 1
         if a.source:
@@ -502,7 +525,7 @@ def keyword_timeline(
         {
             "time": t.isoformat(),
             "count": counts.get(t, 0),
-            "sources": sorted(list(sources.get(t, set())))
+            "sources": sorted(list(sources.get(t, set()))),
         }
         for t in slots
     ]
@@ -546,16 +569,18 @@ def keywords_top_absolute(hours: int = 72, db: Session = Depends(get_db)):
 
     return result
 
-# ➕ in app/api/routes.py hinzufügen
+# ➕ in app/api/routes.py ersetzen
 @router.get("/headlines/words")
 def headlines_words(
     hours: int = Query(72),
     source: str | None = Query(None),
     keyword: str | None = Query(None),
     teaser: bool = Query(False),
+    ngram: int = Query(1, ge=1, le=3),   # 👈 NEU: 1, 2 oder 3
     db: Session = Depends(get_db),
 ):
     from collections import Counter
+    from itertools import combinations
     from app.core.clean_utils import extract_relevant_words
 
     arts = get_articles_last_hours(db, hours)
@@ -565,23 +590,40 @@ def headlines_words(
         s = source.strip().lower()
         arts = [a for a in arts if a.source.strip().lower() == s]
 
-    # optionales Keyword (wie bei /articles/filtered)
+    # optional: Keyword-Filter (wie /articles/filtered)
+    import re
     if keyword:
-        import re
-        patt = re.compile(rf"\b{re.escape(keyword.lower())}\b")
+        # Mehrfachbegriffe mit '+' (ukraine + frieden) → alle müssen matchen
+        terms = [t.strip().lower() for t in keyword.split('+') if t.strip()]
         def match(a):
-            if patt.search(a.title.lower()): return True
-            if teaser and a.teaser and patt.search(a.teaser.lower()): return True
-            return False
+            txt = a.title.lower()
+            if teaser and a.teaser:
+                txt += " " + a.teaser.lower()
+            return all(re.search(rf"\b{re.escape(t)}\b", txt) for t in terms)
         arts = [a for a in arts if match(a)]
 
-    # Worte zählen (nur aus dem Titel, wie bisher)
+    # Zählen: pro Headline jede Einheit nur 1×
     c = Counter()
     for a in arts:
-        c.update(extract_relevant_words(a.title))
+        tokens = list(extract_relevant_words(a.title))  # Stopwords bleiben draußen
+        if teaser and a.teaser:
+            # optional auch Teaser berücksichtigen, falls du es möchtest:
+            # tokens += list(extract_relevant_words(a.teaser))
+            pass
+
+        units: set[str]
+        if ngram == 1:
+            units = set(tokens)
+        else:
+            # Reihenfolgeunabhängige Kombis: alphabetisch sortieren und mit " + " verbinden
+            combos = set(" + ".join(sorted(tup)) for tup in combinations(tokens, ngram))
+            units = combos
+
+        c.update(units)
 
     # Array-Form für die UI
     return sorted([[w, n] for w, n in c.items()], key=lambda x: x[1], reverse=True)
+
 
 # --- NEU: Keyword-Seitenzählung (X/Y) als einfache Balken ---
 @router.get("/keywords/sides")
