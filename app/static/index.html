@@ -410,7 +410,11 @@ async function loadKeywordTrends() {
 }
 
 async function loadTopAbsoluteKeywords() {
-  const res = await fetch(`/keywords/top-absolute?hours=${filters.hours}`);
+  const res = await fetch(
+    `/keywords/top-absolute?hours=${filters.hours}` +
+    `&ngram=${filters.ngram ?? 1}` +
+    (filters.teaser ? "&teaser=true" : "")
+  );
   const data = await res.json();
 
   const container = document.querySelector("#keywordTopAbsoluteColumns");
@@ -514,6 +518,8 @@ function setNgram(n){
   filters.ngram = n;
   loadWordcloud();
   loadFilteredMediaCompass();
+  loadTopAbsoluteKeywords();
+  loadBlindspotFeed();
   updateFilterDisplay && updateFilterDisplay();
   updateURLFromFilters && updateURLFromFilters();
 }
@@ -1138,7 +1144,9 @@ async function loadBlindspotFeed() {
     72;
 
   const url = `/blindspots/keywords-feed?hours=${hours}&min_total=5&ratio_max=0.20`
+            + `&ngram=${filters.ngram ?? 1}`
             + (filters.teaser ? "&teaser=true" : "");
+
 
   const res = await fetch(url, { cache: "no-store" }); // verhindert Browser-Cache
   if (!res.ok) return;

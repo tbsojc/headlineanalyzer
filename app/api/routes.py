@@ -532,9 +532,26 @@ def keyword_timeline(
 
 
 @router.get("/keywords/top-absolute")
-def keywords_top_absolute(hours: int = 72, db: Session = Depends(get_db)):
+def keywords_top_absolute(
+    hours: int = Query(72),
+    ngram: int = Query(1, ge=1, le=3),   # 1, 2 oder 3-Wort-Kombis
+    teaser: bool = Query(False),          # optional Teaser einbeziehen
+    db: Session = Depends(get_db),
+):
     from collections import Counter
+    from itertools import combinations
     from app.core.clean_utils import extract_relevant_words
+
+    def units_from_article(a):
+        # Stopwords bleiben draußen (extract_relevant_words)
+        tokens = set(extract_relevant_words(a.title))
+        if teaser and a.teaser:
+            tokens |= set(extract_relevant_words(a.teaser))
+        toks = sorted(tokens)
+        if ngram == 1:
+            return set(toks)
+        # Reihenfolgeunabhängige Kombis, pro Headline nur 1× zählen
+        return {" + ".join(c) for c in combinations(toks, ngram)}
 
     now_words = Counter()
     past_words = Counter()
@@ -542,32 +559,30 @@ def keywords_top_absolute(hours: int = 72, db: Session = Depends(get_db)):
     # Aktueller Zeitraum
     now_articles = get_articles_last_hours(db, hours)
     for a in now_articles:
-        now_words.update(extract_relevant_words(a.title))
+        now_words.update(units_from_article(a))
 
-    # Vergleichszeitraum
+    # Vergleichszeitraum (vorherige gleich lange Periode)
     past_articles = get_articles_last_hours(db, hours * 2)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     for a in past_articles:
         if a.published_at < cutoff:
-            past_words.update(extract_relevant_words(a.title))
+            past_words.update(units_from_article(a))
 
-    # Top 30 absolute Werte + Veränderung
+    # Top 30 + Veränderung
     result = []
-    for word, current_count in now_words.most_common(30):
-        prev_count = past_words.get(word, 0)
+    for term, current_count in now_words.most_common(30):
+        prev_count = past_words.get(term, 0)
         delta = current_count - prev_count
-        change_pct = (delta / prev_count * 100) if prev_count > 0 else 0
-        result.append(
-            {
-                "word": word,
-                "current": current_count,
-                "previous": prev_count,
-                "delta": delta,
-                "change_pct": round(change_pct, 2),
-            }
-        )
-
+        change_pct = (delta / prev_count * 100) if prev_count > 0 else 0.0
+        result.append({
+            "word": term,
+            "current": current_count,
+            "previous": prev_count,
+            "delta": delta,
+            "change_pct": round(change_pct, 2),
+        })
     return result
+
 
 # ➕ in app/api/routes.py ersetzen
 @router.get("/headlines/words")
@@ -713,39 +728,36 @@ def keyword_sides(
 
     return {"word": word, "hours": hours, "t": T, "counts": counts, "blindspots": blindspots}
 
-
-# --- Blindspot-Feed (Variante B): vier Listen je Richtung ---
 @router.get("/blindspots/keywords-feed")
 def blindspot_keywords_feed(
     hours: int = Query(72),
     min_total: int = Query(10),
-    ratio_max: float = Query(0.05),  # 5% = "kaum"
+    ratio_max: float = Query(0.05),
     top_n: int = Query(25),
     teaser: bool = Query(False),
+    ngram: int = Query(1, ge=1, le=3),   # 👈 NEU: 1, 2 oder 3
     db: Session = Depends(get_db),
 ):
     """
-    Liefert vier Listen: kaum systemkritisch / systemnah / nationalistisch / globalistisch.
-    Kriterium: Anteil der jeweiligen Seite <= ratio_max UND Gesamt-Nennungen >= min_total.
-    Sortierung: zuerst nach kleinstem Anteil, dann nach Gesamt-Nennungen.
+    Vier Listen: kaum systemkritisch / systemnah / nationalistisch / globalistisch.
+    Zählung je Headline: pro (n=1/2/3)-Einheit höchstens 1×.
     """
     from collections import defaultdict
+    from itertools import combinations
     from app.core.clean_utils import extract_relevant_words
 
-    # Schwelle zur Seiten-Bucketisierung (wie in /keywords/sides)
-    T = 0.20
+    T = 0.20  # Bucket-Schwelle wie gehabt
 
-    # Medien-Bias laden (wie in /keywords/bias-vector)
+    # Medien-Bias laden
     df = load_media_df()
     bias_map = {
         row["norm_name"]: (row["Systemnähe (X)"], row["Globalismus (Y)"])
         for _, row in df.iterrows()
     }
 
-    # Artikel-Zeitfenster
     articles = get_articles_last_hours(db, hours)
 
-    # Zählcontainer: je Keyword sammeln wir alle (x,y)-Punkte und Quellen
+    # je "word"/Kombi: alle (x,y)-Punkte + Quellenset sammeln
     coords_by_word = defaultdict(list)
     sources_by_word = defaultdict(set)
 
@@ -754,26 +766,30 @@ def blindspot_keywords_feed(
         if norm not in bias_map:
             continue
         x, y = bias_map[norm]
-        words = extract_relevant_words(a.title)
+
+        # Tokens ohne Stopwörter, optional inkl. Teaser
+        toks = set(extract_relevant_words(a.title))
         if teaser and a.teaser:
-            # denselben Extractor auch für Teaser verwenden
-            words |= extract_relevant_words(a.teaser)
-        for w in words:
+            toks |= set(extract_relevant_words(a.teaser))
+        toks = sorted(toks)
+
+        # 1er/2er/3er-Einheiten pro Headline (reihenfolgeunabhängig, dedupliziert)
+        units = set(toks) if ngram == 1 else {" + ".join(c) for c in combinations(toks, ngram)}
+
+        for w in units:
             coords_by_word[w].append((x, y))
             sources_by_word[w].add(norm)
 
-    # Hilfszähler für Achsen-Buckets
+    # Buckets zählen (X/Y)
     def counts_for(coords):
-        xk = xn = xr = 0  # kritisch, neutral, nah
-        yn = yc = yg = 0  # national, neutral, global
+        xk = xn = xr = 0
+        yn = yc = yg = 0
         for x, y in coords:
-            # X
             if x <= -T: xk += 1
-            elif x >= T: xr += 1
+            elif x >=  T: xr += 1
             else: xn += 1
-            # Y
             if y <= -T: yn += 1
-            elif y >= T: yg += 1
+            elif y >=  T: yg += 1
             else: yc += 1
         total = len(coords)
         return (
@@ -781,7 +797,6 @@ def blindspot_keywords_feed(
             {"national": yn, "neutral": yc, "global": yg, "total": total},
         )
 
-    # Vier Ergebnislisten
     L_kritisch, L_nah, L_national, L_global = [], [], [], []
 
     for w, coords in coords_by_word.items():
@@ -790,7 +805,6 @@ def blindspot_keywords_feed(
         x_counts, y_counts = counts_for(coords)
         total = x_counts["total"] or 1
 
-        # Anteile
         p_krit = x_counts["kritisch"] / total
         p_nah  = x_counts["nah"]      / total
         p_nat  = y_counts["national"] / total
@@ -803,11 +817,10 @@ def blindspot_keywords_feed(
             "total": total,
             "ratios": {
                 "kritisch": round(p_krit, 3),
-                "nah": round(p_nah, 3),
+                "nah":      round(p_nah, 3),
                 "national": round(p_nat, 3),
-                "global": round(p_glo, 3),
+                "global":   round(p_glo, 3),
             },
-            # Badges für 0%-Fälle (nice-to-have für UI)
             "zero_badge": {
                 "kritisch": x_counts["kritisch"] == 0,
                 "nah":      x_counts["nah"]      == 0,
@@ -816,22 +829,23 @@ def blindspot_keywords_feed(
             }
         }
 
-        # Einordnen nach "kaum"-Kriterium
         if p_krit <= ratio_max: L_kritisch.append(item)
         if p_nah  <= ratio_max: L_nah.append(item)
         if p_nat  <= ratio_max: L_national.append(item)
         if p_glo  <= ratio_max: L_global.append(item)
 
-    # Sortierung: kleinster Anteil zuerst, dann total absteigend
     def sort_list(lst, key_name):
         return sorted(lst, key=lambda it: (it["ratios"][key_name], -it["total"]))[:top_n]
 
     return {
-        "params": {"hours": hours, "min_total": min_total, "ratio_max": ratio_max, "top_n": top_n},
+        "params": {
+            "hours": hours, "min_total": min_total, "ratio_max": ratio_max,
+            "top_n": top_n, "ngram": ngram, "teaser": teaser
+        },
         "items": {
-            "systemkritisch": sort_list(L_kritisch, "kritisch"),
-            "systemnah":      sort_list(L_nah,      "nah"),
-            "nationalistisch":sort_list(L_national, "national"),
-            "globalistisch":  sort_list(L_global,   "global"),
+            "systemkritisch":  sort_list(L_kritisch, "kritisch"),
+            "systemnah":       sort_list(L_nah,      "nah"),
+            "nationalistisch": sort_list(L_national, "national"),
+            "globalistisch":   sort_list(L_global,   "global"),
         }
     }
