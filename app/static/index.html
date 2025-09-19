@@ -553,6 +553,7 @@ window.addEventListener('load', () => markActiveNgram(filters.ngram));
   }
 
 
+
   function renderKeywordSidesBars(container, data) {
   container.innerHTML = "";
   const wrap = document.createElement("div");
@@ -1254,10 +1255,31 @@ function updateURLFromFilters() {
       loadTopAbsoluteKeywords();
 
       if (filters.keyword) {
-      renderKeywordTimeline(filters.keyword);
+        renderKeywordTimeline(filters.keyword);
       }
       loadBlindspotFeed();
+
+      // ✅ X/Y-Verteilung für aktuelles Keyword neu laden
+      if (filters.keyword) {
+        const box = document.getElementById("keywordSides");
+        if (box) {
+          box.innerHTML = "";
+          loadKeywordSides(filters.keyword)  // nutzt &hours intern
+            .then(sides => {
+              if (sides) {
+                renderKeywordSidesBars(box, sides);
+              } else {
+                box.textContent = "Keine Daten für dieses Keyword im aktuellen Zeitfenster.";
+              }
+            })
+            .catch(err => {
+              console.error(err);
+              box.textContent = "Fehler beim Laden der Verteilung.";
+            });
+        }
       }
+    }
+
 
     // Event-Listener für die Quellen-Auswahl
     document.getElementById("sourceSelect").addEventListener("change", (e) => {
@@ -1366,6 +1388,21 @@ function renderActiveFilterChips(){
       loadFilteredMediaCompass();
       updateURLFromFilters();
       loadBlindspotFeed();
+
+      // X/Y-Verteilung bei Reset auf 72h neu laden
+      if (filters.keyword) {
+        const box = document.getElementById("keywordSides");
+        if (box) {
+          box.innerHTML = "";
+          loadKeywordSides(filters.keyword)
+            .then(sides => {
+              if (sides) renderKeywordSidesBars(box, sides);
+              else box.textContent = "Keine Daten für dieses Keyword im aktuellen Zeitfenster.";
+            })
+            .catch(() => box.textContent = "Fehler beim Laden der Verteilung.");
+        }
+      }
+
       renderActiveFilterChips();
     }
   }, { removable: filters.hours !== 72 });
@@ -1482,7 +1519,7 @@ window.setTimeFilter = function(h){
 };
 
 // Bias-Buttons markieren
-const biasBtns = Array.from(document.querySelectorAll('.drawer-section:nth-of-type(2) .btnrow button'));
+const biasBtns = Array.from(document.querySelectorAll('#biasFilters button'));
 function markActiveBias(nameOrNull){
   biasBtns.forEach(b => b.classList.remove('is-active'));
   let label = 'Alle';
