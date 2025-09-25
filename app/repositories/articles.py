@@ -60,3 +60,15 @@ def bulk_upsert_articles(db: Session, items) -> int:
 
     # rowcount = Anzahl wirklich eingefügter Zeilen (Konflikte zählen nicht)
     return res.rowcount or 0
+
+
+def get_articles_between(db: Session, start_utc: datetime, end_utc: datetime, limit: int | None = None, offset: int = 0):
+    q = (
+        db.query(ArticleORM)
+          .filter(ArticleORM.published_at >= start_utc)
+          .filter(ArticleORM.published_at <  end_utc)
+          .order_by(ArticleORM.published_at.desc())
+    )
+    if offset: q = q.offset(offset)
+    if limit:  q = q.limit(limit)
+    return q.all()

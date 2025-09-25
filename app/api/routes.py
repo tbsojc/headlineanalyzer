@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import re
 import pandas as pd
 
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Query, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
@@ -22,8 +22,16 @@ from app.core.feeds import fetch_articles, fetch_articles_from_source
 
 # ORM/Repository – zentrale DB-Zugriffe
 from app.database import get_db
-from app.repositories.articles import get_articles_last_hours, bulk_upsert_articles
+from app.repositories.articles import get_articles_last_hours, bulk_upsert_articles, get_articles_between
 from app.schemas import Article as ArticleSchema
+from app.api.date_range_spec import (
+    decide_time_window, bucket_for_range, ensure_utc,
+    iter_slots, round_to_bucket, previous_window
+)
+from app.api.perf import ensure_indexes, MAX_ROWS_PER_REQUEST, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, pagination_params
+from math import ceil
+from fastapi import Response
+
 
 router = APIRouter()
 
@@ -39,6 +47,49 @@ def load_media_df() -> pd.DataFrame:
 
 def norm_source(name: str) -> str:
     return (name or "").strip().lower()
+
+def _time_window_or_400(hours: int | None, from_: str | None, to: str | None):
+    try:
+        return decide_time_window(hours, from_, to)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+
+
+def _select_articles(
+    db: Session,
+    hours: int | None,
+    from_: str | None,
+    to: str | None,
+    *,
+    unbounded: bool = False,          # <- Schalter
+    order: str = "desc",              # "desc" für Listen, "asc" für Aggregationen ok
+    request: Request | None = None,   # für page/page_size bei Listen
+):
+    tw = _time_window_or_400(hours, from_, to)
+    if tw["mode"] == "range":
+        start = ensure_utc(tw["from"])
+        end   = ensure_utc(tw["to"])
+        bucket = bucket_for_range(start, end)
+        mode = "range"
+    else:
+        hours_eff = int(tw["hours"])
+        end   = datetime.now(timezone.utc).replace(microsecond=0)
+        start = end - timedelta(hours=hours_eff)
+        bucket = "hour"
+        mode = "hours"
+
+    # Pagination nur für Listen
+    limit, offset = pagination_params(request, unbounded=unbounded) if request else (None, None)
+
+    articles = get_articles_between(db, start, end, limit=limit, offset=offset)
+
+    if order == "asc":
+        articles = list(sorted(articles, key=lambda a: a.published_at))
+
+    return articles, start, end, mode, bucket
+
 
 
 # -----------------------------
@@ -73,13 +124,19 @@ def media_positions_by_keyword(
     hours: int = Query(72),
     source: Optional[str] = Query(None),
     teaser: bool = Query(False),
+    from_: str | None = Query(None, alias="from"),   # NEU
+    to: str | None = Query(None),                     # NEU
     db: Session = Depends(get_db),
 ):
     keyword = word.lower()
     pattern = rf"\b{re.escape(keyword)}\b"
 
-    # Zeitraum
-    articles = get_articles_last_hours(db, hours)
+    tw = _time_window_or_400(hours, from_, to)
+    hours_eff = tw["hours"] if tw["mode"] == "hours" else max(
+        int((tw["to"] - tw["from"]).total_seconds() // 3600), 1
+    )
+
+    articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
 
     # optional Quelle filtern
     if source:
@@ -215,13 +272,14 @@ def headlines_by_source(source: str):
 # -----------------------------
 @router.get("/refresh")
 def refresh(db: Session = Depends(get_db)):
-    items = fetch_articles()  # liefert Pydantic-ähnliche Artikel (siehe feeds.py Anpassung)
+    ensure_indexes(db)  # Indexe sicherstellen
+    items = fetch_articles()
     count = bulk_upsert_articles(db, items)
     return {"status": "updated", "count": count}
 
-
 @router.get("/fetch")
 def fetch_source(source: str = Query(...), db: Session = Depends(get_db)):
+    ensure_indexes(db)  # Indexe sicherstellen
     items = fetch_articles_from_source(source)
     count = bulk_upsert_articles(db, items)
     return {
@@ -240,29 +298,38 @@ def filtered_articles(
     source: str | None = Query(None),
     keyword: str | None = Query(None),
     teaser: bool = Query(False),
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1),
     db: Session = Depends(get_db),
+    request: Request = None,
 ):
-    articles = get_articles_last_hours(db, hours)
+    arts, start, end, mode, bucket = _select_articles(
+        db, hours, from_, to,
+        unbounded=False, order="desc", request=request
+    )
+    articles = arts  # konsistent bleiben
 
+    # Quelle
     if source:
         s = source.strip().lower()
-        articles = [a for a in articles if a.source.strip().lower() == s]
+        articles = [a for a in articles if (a.source or "").strip().lower() == s]
 
+    # Keyword (Titel; optional Teaser)
     if keyword:
-        # "ukraine + frieden" => beide Begriffe müssen vorkommen
-        terms = [t.strip().lower() for t in keyword.split('+') if t.strip()]
-
+        import re
+        pat = re.compile(rf"\b{re.escape(keyword.strip().lower())}\b")
         def match(a):
-            txt = a.title.lower()
-            if teaser and a.teaser:
-                txt += " " + a.teaser.lower()
-            import re
-            return all(re.search(rf"\b{re.escape(t)}\b", txt) for t in terms)
-
+            title = (a.title or "").lower()
+            te = (a.teaser or "").lower() if teaser and a.teaser else ""
+            return bool(pat.search(title) or (te and pat.search(te)))
         articles = [a for a in articles if match(a)]
+    elif teaser:
+        # Nur Teaser-Artikel anzeigen (wenn kein Keywordfilter)
+        articles = [a for a in articles if a.teaser]
 
-
-    return [ArticleSchema.model_validate(a) for a in articles]
+    return articles
 
 
 # -----------------------------
@@ -274,12 +341,19 @@ def media_positions_filtered(
     source: str = Query(None),
     keyword: str = Query(None),
     teaser: bool = Query(False),
+    from_: str | None = Query(None, alias="from"),   # NEU
+    to: str | None = Query(None),                     # NEU
     db: Session = Depends(get_db),
 ):
     from collections import Counter
 
+    tw = _time_window_or_400(hours, from_, to)
+    hours_eff = tw["hours"] if tw["mode"] == "hours" else max(
+        int((tw["to"] - tw["from"]).total_seconds() // 3600), 1
+    )
+
     df = load_media_df()
-    articles = get_articles_last_hours(db, hours)
+    articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
 
     if source:
         articles = [a for a in articles if a.source.strip().lower() == source.strip().lower()]
@@ -359,15 +433,25 @@ def keyword_trends(db: Session = Depends(get_db)):
 
 
 @router.get("/keywords/extreme-bubble")
-def extreme_keywords(hours: int = 72, db: Session = Depends(get_db)):
+def extreme_keywords(
+    hours: int = 72,
+    from_: str | None = Query(None, alias="from"),   # NEU
+    to: str | None = Query(None),                     # NEU
+    db: Session = Depends(get_db),
+):
     from collections import defaultdict, Counter
     from app.core.clean_utils import extract_relevant_words
+
+    tw = _time_window_or_400(hours, from_, to)
+    hours_eff = tw["hours"] if tw["mode"] == "hours" else max(
+        int((tw["to"] - tw["from"]).total_seconds() // 3600), 1
+    )
+    articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
 
     # Medienkompass laden
     df = load_media_df()
     bias_map = dict(zip(df["norm_name"], df["Systemnähe (X)"]))
 
-    articles = get_articles_last_hours(db, hours)
 
     words_extreme = Counter()
     words_other = Counter()
@@ -401,14 +485,24 @@ def extreme_keywords(hours: int = 72, db: Session = Depends(get_db)):
 
 
 @router.get("/keywords/bias-score")
-def keyword_bias_scores(hours: int = 72, db: Session = Depends(get_db)):
+def keyword_bias_scores(
+    hours: int = 72,
+    from_: str | None = Query(None, alias="from"),   # NEU
+    to: str | None = Query(None),                     # NEU
+    db: Session = Depends(get_db),
+):
     from collections import defaultdict
     from app.core.clean_utils import extract_relevant_words
+
+    tw = _time_window_or_400(hours, from_, to)
+    hours_eff = tw["hours"] if tw["mode"] == "hours" else max(
+        int((tw["to"] - tw["from"]).total_seconds() // 3600), 1
+    )
+    articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
 
     df = load_media_df()
     media_bias = dict(zip(df["norm_name"], df["Systemnähe (X)"]))
 
-    articles = get_articles_last_hours(db, hours)
     keyword_positions = defaultdict(list)
 
     for a in articles:
@@ -430,9 +524,16 @@ def keyword_bias_scores(hours: int = 72, db: Session = Depends(get_db)):
 
 
 @router.get("/keywords/bias-vector")
-def keyword_bias_vector(hours: int = 72, db: Session = Depends(get_db)):
+def keyword_bias_vector(
+    hours: int = 72,
+    from_: str | None = Query(None, alias="from"),   # NEU
+    to: str | None = Query(None),                     # NEU
+    db: Session = Depends(get_db),
+):
     from collections import defaultdict
     from app.core.clean_utils import extract_relevant_words
+
+
 
     df = load_media_df()
     bias_map = {
@@ -440,7 +541,11 @@ def keyword_bias_vector(hours: int = 72, db: Session = Depends(get_db)):
         for _, row in df.iterrows()
     }
 
-    articles = get_articles_last_hours(db, hours)
+    tw = _time_window_or_400(hours, from_, to)
+    hours_eff = tw["hours"] if tw["mode"] == "hours" else max(
+        int((tw["to"] - tw["from"]).total_seconds() // 3600), 1
+    )
+    articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
     keyword_coords = defaultdict(list)
 
     for a in articles:
@@ -467,108 +572,88 @@ def keyword_timeline(
     word: str,
     hours: int = 72,
     teaser: bool = Query(False),
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
+    bucket: str = Query("auto", pattern="^(auto|hour|day|week)$"),
     db: Session = Depends(get_db)
 ):
     """
-    Zählt pro Stunde die Headlines, die ALLE Terme aus `word` enthalten.
-    Mehrere Terme mit '+' trennen, z. B.:
-      - 'ukraine+frieden'  (2)
-      - 'ukraine+selensky+frieden' (3)
-    Stopwords bleiben draußen (extract_relevant_words).
-    Antwort enthält je Bucket eine deduplizierte Quellenliste (sources) für Tooltips.
+    Zeitreihe der Treffer pro Bucket. bucket=auto|hour|day|week
+    - auto: <=14d → hour, >14d → day
     """
     from collections import defaultdict
-    from app.core.clean_utils import extract_relevant_words
     import re
 
-    # Zeitfenster (volle Stunden)
-    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    start = now - timedelta(hours=hours)
-    slots = [start + timedelta(hours=i) for i in range(hours + 1)]
+    articles, start, end, mode, auto_bucket = _select_articles(db, hours, from_, to)
+    if bucket == "auto":
+        bucket = auto_bucket
+    # 'week' ist zusätzlich möglich (UI kann später anbieten)
 
-    # Terme vorbereiten
+    # Terme
     raw = (word or "").strip().lower()
     terms = [t.strip() for t in raw.split("+") if t.strip()]
     if not terms:
-        return [{"time": t.isoformat(), "count": 0, "sources": []} for t in slots]
+        return []
 
     patterns = [re.compile(rf"\b{re.escape(t)}\b") for t in terms]
 
-    articles = get_articles_last_hours(db, hours)
+    # Slots & Gruppierung
+    slots = iter_slots(start, end, bucket)  # inkl. end
+    def slot_key(dt: datetime): return round_to_bucket(dt, bucket)
 
-    # Buckets
-    counts = defaultdict(int)
-    sources = defaultdict(set)
-
-    def matches_all(a) -> bool:
-        title_l = a.title.lower()
-        teaser_l = (a.teaser or "").lower()
-        tokens_title = set(extract_relevant_words(a.title))
-        tokens_teaser = set(extract_relevant_words(a.teaser)) if (teaser and a.teaser) else set()
-
-        for i, term in enumerate(terms):
-            in_title = bool(patterns[i].search(title_l)) or (term in tokens_title)
-            in_teasr = bool(patterns[i].search(teaser_l)) or (term in tokens_teaser) if teaser else False
-            if not (in_title or in_teasr):
-                return False
-        return True
-
+    from collections import defaultdict
+    timeline = defaultdict(int)
     for a in articles:
-        if not matches_all(a):
-            continue
-        ts = a.published_at.replace(minute=0, second=0, microsecond=0)
-        counts[ts] += 1
-        if a.source:
-            sources[ts].add(a.source.strip())
+        title_l  = (a.title or "").lower()
+        teaser_l = (a.teaser or "").lower() if (teaser and a.teaser) else ""
+        if all(p.search(title_l) or (teaser and p.search(teaser_l)) for p in patterns):
+            timeline[slot_key(a.published_at)] += 1
 
-    return [
-        {
-            "time": t.isoformat(),
-            "count": counts.get(t, 0),
-            "sources": sorted(list(sources.get(t, set()))),
-        }
-        for t in slots
-    ]
+    return [{"time": s.isoformat(), "count": timeline.get(s, 0)} for s in slots]
+
 
 
 @router.get("/keywords/top-absolute")
 def keywords_top_absolute(
     hours: int = Query(72),
-    ngram: int = Query(1, ge=1, le=3),   # 1, 2 oder 3-Wort-Kombis
-    teaser: bool = Query(False),          # optional Teaser einbeziehen
+    ngram: int = Query(1, ge=1, le=3),
+    teaser: bool = Query(False),
+    compare_prev: bool = Query(False),                 # NEU
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
     db: Session = Depends(get_db),
+    request: Request = None
 ):
     from collections import Counter
     from itertools import combinations
     from app.core.clean_utils import extract_relevant_words
 
+    articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
+
     def units_from_article(a):
-        # Stopwords bleiben draußen (extract_relevant_words)
         tokens = set(extract_relevant_words(a.title))
         if teaser and a.teaser:
             tokens |= set(extract_relevant_words(a.teaser))
         toks = sorted(tokens)
         if ngram == 1:
             return set(toks)
-        # Reihenfolgeunabhängige Kombis, pro Headline nur 1× zählen
         return {" + ".join(c) for c in combinations(toks, ngram)}
 
     now_words = Counter()
     past_words = Counter()
 
-    # Aktueller Zeitraum
-    now_articles = get_articles_last_hours(db, hours)
-    for a in now_articles:
+    # Aktuelle Periode zählen
+    for a in articles:
         now_words.update(units_from_article(a))
 
-    # Vergleichszeitraum (vorherige gleich lange Periode)
-    past_articles = get_articles_last_hours(db, hours * 2)
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    for a in past_articles:
-        if a.published_at < cutoff:
+    # Vorperiode (optional) – gleiche Länge direkt vor [start, end)
+    if compare_prev:
+        p_start, p_end = previous_window(start, end)
+        prev = get_articles_between(db, p_start, p_end)
+        for a in prev:
             past_words.update(units_from_article(a))
 
-    # Top 30 + Veränderung
+    # Ausgabe
     result = []
     for term, current_count in now_words.most_common(30):
         prev_count = past_words.get(term, 0)
@@ -584,21 +669,31 @@ def keywords_top_absolute(
     return result
 
 
-# ➕ in app/api/routes.py ersetzen
 @router.get("/headlines/words")
 def headlines_words(
     hours: int = Query(72),
     source: str | None = Query(None),
     keyword: str | None = Query(None),
     teaser: bool = Query(False),
-    ngram: int = Query(1, ge=1, le=3),   # 👈 NEU: 1, 2 oder 3
+    ngram: int = Query(1, ge=1, le=3),
+    from_: str | None = Query(None, alias="from"),   # NEU
+    to: str | None = Query(None),                     # NEU
     db: Session = Depends(get_db),
+    request: Request = None
 ):
     from collections import Counter
     from itertools import combinations
     from app.core.clean_utils import extract_relevant_words
 
-    arts = get_articles_last_hours(db, hours)
+    tw = _time_window_or_400(hours, from_, to)
+    hours_eff = tw["hours"] if tw["mode"] == "hours" else max(
+        int((tw["to"] - tw["from"]).total_seconds() // 3600), 1
+    )
+
+    arts, start, end, mode, bucket = _select_articles(db, hours, from_, to, unbounded=True, order="asc", request=request)
+    # ... Rest unverändert ...
+    articles = arts
+
 
     # Quelle filtern
     if source:
@@ -645,6 +740,8 @@ def keyword_sides(
     word: str,
     hours: int = Query(72),
     teaser: bool = Query(False),
+    from_: str | None = Query(None, alias="from"),   # NEU
+    to: str | None = Query(None),                     # NEU
     db: Session = Depends(get_db),
 ):
     """
@@ -662,14 +759,20 @@ def keyword_sides(
     # Schwelle für "Seiten" vs. Neutral (wie bisher)
     T = 0.33
 
-    # Terme vorbereiten
+    # Terme
     terms = [t.strip().lower() for t in (word or "").split("+") if t.strip()]
     if not terms:
         return {"error": "word required"}
     patterns = [re.compile(rf"\b{re.escape(t)}\b") for t in terms]
 
-    # Zeitraum
-    articles = get_articles_last_hours(db, hours)
+    # 🔽 NEU: Zeitfenster entscheiden
+    tw = _time_window_or_400(hours, from_, to)
+    hours_eff = tw["hours"] if tw["mode"] == "hours" else max(
+        int((tw["to"] - tw["from"]).total_seconds() // 3600), 1
+    )
+
+    # Artikel holen (vorerst stundenbasiert; echte Range in WP-C)
+    articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
 
     # Artikel-Matching: alle Terme müssen getroffen werden
     matched = []
@@ -752,7 +855,9 @@ def blindspot_keywords_feed(
     ratio_max: float = Query(0.05),
     top_n: int = Query(25),
     teaser: bool = Query(False),
-    ngram: int = Query(1, ge=1, le=3),   # 👈 NEU: 1, 2 oder 3
+    ngram: int = Query(1, ge=1, le=3),
+    from_: str | None = Query(None, alias="from"),   # NEU
+    to: str | None = Query(None),                     # NEU
     db: Session = Depends(get_db),
 ):
     """
@@ -772,7 +877,11 @@ def blindspot_keywords_feed(
         for _, row in df.iterrows()
     }
 
-    articles = get_articles_last_hours(db, hours)
+    tw = _time_window_or_400(hours, from_, to)
+    hours_eff = tw["hours"] if tw["mode"] == "hours" else max(
+        int((tw["to"] - tw["from"]).total_seconds() // 3600), 1
+    )
+    articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
 
     # je "word"/Kombi: alle (x,y)-Punkte + Quellenset sammeln
     coords_by_word = defaultdict(list)
@@ -866,3 +975,4 @@ def blindspot_keywords_feed(
             "globalistisch":   sort_list(L_global,   "global"),
         }
     }
+

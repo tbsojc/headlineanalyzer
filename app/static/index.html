@@ -3,10 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <title>News Trends & Visuals</title>
-  <link rel="stylesheet" href="/ui/style.css">
+  <link rel="stylesheet" href="./style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/d3-cloud/build/d3.layout.cloud.min.js"></script>
+  <script src="./date-range-spec.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/de.js"></script>
 </head>
 <body>
 
@@ -22,6 +26,8 @@
 </nav>
 
 <!-- Aktive Filter: immer sichtbar -->
+<div id="alerts"></div>
+<!--  -->
 <div id="activeFiltersBar" class="active-filters-bar" aria-live="polite"></div>
 
 <!-- Drawer (Off-Canvas) -->
@@ -33,12 +39,24 @@
 
   <section class="drawer-section">
     <h4>Zeitraum</h4>
-    <div class="btnrow">
-      <button onclick="setTimeFilter(24)">24h</button>
-      <button onclick="setTimeFilter(72)">72h</button>
-      <button onclick="setTimeFilter(168)">7 Tage</button>
-      <button onclick="setTimeFilter(720)">30 Tage</button>
+    <div class="time-presets">
+      <button type="button" data-days="1">1 Tag</button>
+      <button type="button" data-days="3">3 Tage</button>
+      <button type="button" data-days="7">7 Tage</button>
+      <button type="button" data-days="30">30 Tage</button>
+      <button type="button" id="btnCustomRange">Benutzerdefiniert…</button>
     </div>
+
+    <!-- index.html – im Bereich "Active Filters" -->
+    <div id="active-filters">
+      <!-- bestehende Badges ... -->
+      <span id="date-range-badge" class="filter-badge" style="display:none">
+        <span class="icon">📅</span>
+        <span class="label" aria-live="polite"></span>
+        <span class="remove" title="Entfernen" aria-label="Zeitraum entfernen">×</span>
+      </span>
+    </div>
+
   </section>
 
   <section class="drawer-section">
@@ -121,7 +139,6 @@
       <option value="Compact">Compact</option>
       <option value="Epoch Times">Epoch Times</option>
       <option value="Blätter für deutsche und internationale Politik">Blätter für deutsche und internationale Politik</option>
-      <option value="Stuttgarter Zeitung">Stuttgarter Zeitung</option>
     </select>
   </section>
 
@@ -185,10 +202,13 @@
       <h2>🧭 Medien-Kompass</h2>
       <canvas id="mediaCompassChart"></canvas>
     </div>
-    <div class="chart-box">
-      <h2>⏲️ Zeitverlauf der Tags</h2>
-      <canvas id="timelineChart"></canvas>
-    </div>
+      <div class="chart-box">
+        <h2>⏲️ Zeitverlauf der Tags</h2>
+        <div id="timelineChartWrap">
+          <canvas id="timelineChart"></canvas>
+        </div>
+      </div>
+
   </div>
 
   <div id="filteredArticles"></div>
@@ -233,13 +253,27 @@
 
 
 
-  <div class="container">
-
-    <ul id="articles" class="article-list"></ul>
 
 
-
+  <!-- Leichtes Modal für Date-Range (wird per JS geöffnet/geschlossen) -->
+<div id="customRangeModal" aria-hidden="true" role="dialog" aria-modal="false"
+     style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:9999; align-items:center; justify-content:center;">
+  <div style="background:#fff; width:min(680px,90vw); border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.2);">
+    <div style="padding:16px 20px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center;">
+      <strong>Benutzerdefinierter Zeitraum</strong>
+      <button type="button" id="btnRangeClose" aria-label="Schließen" style="font-size:18px; line-height:1;">×</button>
+    </div>
+    <div style="padding:16px 20px; display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+      <label style="min-width:80px;">Start/Ende</label>
+      <input id="fpRange" type="text" placeholder="Wähle Start & Ende…" style="flex:1; min-width:260px; padding:8px 10px;">
+      <label><input id="cbIncludeTeaserInRange" type="checkbox"> Teaser berücksichtigen</label>
+    </div>
+    <div style="padding:12px 20px; display:flex; gap:8px; justify-content:flex-end; border-top:1px solid #eee;">
+      <button type="button" id="btnRangeCancel">Abbrechen</button>
+      <button type="button" id="btnRangeApply" style="background:#1e40af; color:#fff; border:none; padding:8px 14px; border-radius:8px;">Übernehmen</button>
+    </div>
   </div>
+</div>
 
 
 
@@ -251,62 +285,113 @@
     let keywordTimelineChart = null;
     let mediaCompassChart = null;
     let selectedKeyword = "";
-    let filters = {
-      hours: 72,
-      source: "",
-      keyword: "",
+
+    // Zentrale Filter – eine Quelle der Wahrheit
+    const FILTERS = {
+      from: null,
+      to: null,
+      source: null,
+      keyword: null,
       teaser: false,
       ngram: 1
     };
 
+    // Kompatibilität: alter Code darf noch "filters" benutzen
+    Object.defineProperty(window, 'filters', {
+      get() { return FILTERS; },
+      set(v) {
+        if (v && typeof v === 'object') {
+          FILTERS.from    = v.from    ?? FILTERS.from;
+          FILTERS.to      = v.to      ?? FILTERS.to;
+          FILTERS.source  = v.source  ?? FILTERS.source;
+          FILTERS.keyword = v.keyword ?? FILTERS.keyword;
+          FILTERS.teaser  = v.teaser  ?? FILTERS.teaser;
+          FILTERS.ngram   = v.ngram   ?? FILTERS.ngram;
+        }
+      }
+    });
 
+    window.addEventListener('load', () => {
+      // URL -> State
+      getFiltersFromURL();
 
-    async function loadFilteredArticles() {
-      const params = new URLSearchParams();
+      // URL normalisieren (exactly one of hours / from-to)
+      updateURLFromFilters(true);
 
-      if (filters.hours) params.append("hours", filters.hours);
-      if (filters.source) params.append("source", filters.source);
-      if (filters.keyword) params.append("keyword", filters.keyword);
-      if (filters.teaser) params.append("teaser", "true");
+      // Badge initial setzen
+      updateDateRangeBadge();
 
-      const res = await fetch(`/articles/filtered?${params.toString()}`);
-      const data = await res.json();
+      // UI sync
+      document.getElementById("sourceSelect").value = FILTERS.source || "";
+      document.getElementById("keywordInput").value = FILTERS.keyword || "";
+      document.getElementById("teaserToggle").checked = !!FILTERS.teaser;
 
-      renderFilteredArticles(data);
+      // Initiale Datenladungen
       loadWordcloud();
-      loadFilteredMediaCompass();
-      updateFilterDisplay();
-      updateURLFromFilters();
+      loadMediaCompass();
+      loadFilteredArticles();
+      loadKeywordTrends();
+      loadExtremeBubbles();
+      loadTopAbsoluteKeywords();
+      loadBlindspotFeed();
+    });
 
+
+  function getFiltersFromURL() {
+    const p = new URLSearchParams(location.search);
+    const from = p.get('from');
+    const to   = p.get('to');
+
+    FILTERS.source  = p.get('source')  || null;
+    FILTERS.keyword = p.get('keyword') || null;
+    FILTERS.teaser  = p.get('teaser') === '1' || p.get('teaser') === 'true';
+
+    if (from && to) {
+      // URL-Werte ggf. auf "jetzt" klemmen (Server verbietet Zukunft)
+      const f = new Date(from);
+      const t = new Date(to);
+      const { from: f2, to: t2 } = clampRangeToNow(f, t);
+      FILTERS.from = toLocalIsoWithTZ(f2);
+      FILTERS.to   = toLocalIsoWithTZ(t2);
+    } else {
+      // Standard: 7 Kalendertage bis JETZT (exklusiv)
+      const endEx = nowExclusive();
+      const defFrom = startOfDay(new Date(endEx.getTime() - 6 * 86400000));
+      FILTERS.from = toLocalIsoWithTZ(defFrom);
+      FILTERS.to   = toLocalIsoWithTZ(endEx);
     }
+  }
+
+  function updateURLFromFilters(replace=false) {
+    const p = new URLSearchParams();
+    p.set('from', FILTERS.from);
+    p.set('to',   FILTERS.to);
+    if (FILTERS.source)  p.set('source', FILTERS.source);
+    if (FILTERS.keyword) p.set('keyword', FILTERS.keyword);
+    if (FILTERS.teaser)  p.set('teaser', '1');
+    const url = `?${p.toString()}`;
+    replace ? history.replaceState(null,'',url) : history.pushState(null,'',url);
+  }
 
 
-
-    function renderFilteredArticles(articles) {
-      const container = document.getElementById("articles");
-      container.innerHTML = "";
-
-      if (articles.length === 0) {
-        container.innerHTML = "<p>Keine Artikel gefunden.</p>";
-        return;
-      }
-
-      for (const a of articles) {
-        const date = new Date(a.published_at).toLocaleString("de-DE", {
-          day: "2-digit", month: "2-digit", year: "numeric",
-          hour: "2-digit", minute: "2-digit"
-        });
-
-        const li = document.createElement("li");
-        li.classList.add("article");
-        li.innerHTML = `
-          <a href="${a.url}" target="_blank">${a.title}</a><br>
-          <span class="source">${a.source} – ${date}</span>
-        `;
-        container.appendChild(li);
-      }
+  function buildTimeQuery() {
+    if (FILTERS.from && FILTERS.to) {
+      return `from=${encodeURIComponent(FILTERS.from)}&to=${encodeURIComponent(FILTERS.to)}`;
     }
+    // Fallback: 7 Kalendertage bis JETZT (exklusiv)
+    const endEx = nowExclusive();
+    const from  = startOfDay(new Date(endEx.getTime() - 6*86400000));
+    FILTERS.from = toLocalIsoWithTZ(from);
+    FILTERS.to   = toLocalIsoWithTZ(endEx);
+    return `from=${encodeURIComponent(FILTERS.from)}&to=${encodeURIComponent(FILTERS.to)}`;
+  }
 
+
+function withTime(urlBase, extraParams = "") {
+  const time = buildTimeQuery();
+  const sep = urlBase.includes("?") ? "&" : "?";
+  return `${urlBase}${sep}${time}${extraParams ? "&" + extraParams : ""}`;
+}
 
 
 
@@ -316,6 +401,7 @@ async function searchByKeyword(kw = null) {
 
   filters.keyword = keyword;
   selectedKeyword = keyword;
+  updateURLFromFilters(false);
 
   loadFilteredArticles();
   loadExtremeBubbles();
@@ -350,13 +436,56 @@ async function searchByKeyword(kw = null) {
       }
 
       container.innerHTML = `
-        <h3>Artikel zu "${selectedKeyword}" von ausgewähltem Medium</h3>
+        <h3>${selectedKeyword ? `Artikel zu "${selectedKeyword}"` : "Artikel"} vom ausgewählten Medium</h3>
         <ul>
           ${articles.map(a => `<li><a href="${a.url}" target="_blank">${a.title}</a></li>`).join("")}
         </ul>
       `;
     }
 
+async function loadFilteredArticles(page = 1) {
+  const qs = new URLSearchParams();
+  if (FILTERS.source)  qs.set("source", FILTERS.source);
+  if (FILTERS.keyword) qs.set("keyword", FILTERS.keyword);
+  if (FILTERS.teaser)  qs.set("teaser", "true");
+  qs.set("page", String(page));
+  // page_size kannst du später paginieren; Standard reicht hier
+
+  const url = withTime("/articles/filtered", qs.toString());
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) {
+    document.getElementById("filteredArticles").innerHTML =
+      `<div class="empty-state">Fehler beim Laden (${res.status}).</div>`;
+    return;
+  }
+  const data = await res.json();
+  renderFilteredArticles(data);
+}
+
+function renderFilteredArticles(list) {
+  const el = document.getElementById("filteredArticles");
+  if (!el) return;
+
+  if (!list || list.length === 0) {
+    el.innerHTML = `
+      <div class="empty-state">
+        Keine Artikel im gewählten Zeitraum.
+        <span class="hint">Tipp: Erhöhe den Zeitraum (z. B. 7d) oder entferne Filter.</span>
+      </div>`;
+    return;
+  }
+
+  el.innerHTML = list.map(a => `
+    <article class="article-card" style="border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin:10px 0;background:#fff">
+      <div class="muted" style="font-size:.85rem">${new Date(a.published_at).toLocaleString('de-DE')}</div>
+      <h3 style="margin:.2rem 0 .4rem 0">
+        <a href="${a.url}" target="_blank" rel="noopener">${a.title ?? ""}</a>
+      </h3>
+      ${a.teaser ? `<p class="muted" style="margin:.3rem 0 0 0">${a.teaser}</p>` : ""}
+      <div class="muted" style="font-size:.85rem;margin-top:.25rem">${a.source ?? ""}</div>
+    </article>
+  `).join("");
+}
 
 async function loadKeywordTrends() {
   const res = await fetch("/keywords/trending");
@@ -410,17 +539,18 @@ async function loadKeywordTrends() {
 }
 
 async function loadTopAbsoluteKeywords() {
-  const res = await fetch(
-    `/keywords/top-absolute?hours=${filters.hours}` +
-    `&ngram=${filters.ngram ?? 1}` +
-    (filters.teaser ? "&teaser=true" : "")
-  );
+  const qs = new URLSearchParams({
+    ngram: String(FILTERS.ngram ?? 1),
+    compare_prev: "1"
+  });
+  if (FILTERS.teaser) qs.set("teaser", "true");
+  const res = await fetch(withTime("/keywords/top-absolute", qs.toString()));
   const data = await res.json();
 
   const container = document.querySelector("#keywordTopAbsoluteColumns");
   container.innerHTML = "";
 
-  // In 3 Blöcke à 10 teilen
+  // 3 Spalten à 10
   const chunkSize = 10;
   for (let i = 0; i < 3; i++) {
     const chunk = data.slice(i * chunkSize, (i + 1) * chunkSize);
@@ -440,13 +570,11 @@ async function loadTopAbsoluteKeywords() {
       </thead>
       <tbody></tbody>
     `;
-
     const tbody = table.querySelector("tbody");
 
     chunk.forEach(row => {
       const pctChange = row.change_pct;
       const trendClass = pctChange >= 0 ? "trend-up" : "trend-down";
-
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>${row.word}</td>
@@ -454,11 +582,8 @@ async function loadTopAbsoluteKeywords() {
         <td class="${trendClass}">${row.delta >= 0 ? "+" : ""}${row.delta}</td>
         <td class="${trendClass}">${pctChange >= 0 ? "+" : ""}${pctChange}%</td>
       `;
-
-      // ✅ Klick-Event: Suchfunktion aufrufen
       tr.style.cursor = "pointer";
       tr.onclick = () => searchByKeyword(row.word);
-
       tbody.appendChild(tr);
     });
 
@@ -479,7 +604,6 @@ async function loadTopAbsoluteKeywords() {
     loadFilteredMediaCompass();
     loadBlindspotFeed();
     updateFilterDisplay();
-    updateURLFromFilters && updateURLFromFilters(); // falls vorhanden
 
   }
 
@@ -521,7 +645,6 @@ function setNgram(n){
   loadTopAbsoluteKeywords();
   loadBlindspotFeed();
   updateFilterDisplay && updateFilterDisplay();
-  updateURLFromFilters && updateURLFromFilters();
 }
 
 const ngramBtns = () => Array.from(document.querySelectorAll('#ngramButtons button'));
@@ -546,7 +669,8 @@ window.addEventListener('load', () => markActiveNgram(filters.ngram));
 
 
   async function loadKeywordSides(word) {
-    const url = `/keywords/sides?word=${encodeURIComponent(word)}&hours=${filters.hours}` + (filters.teaser ? "&teaser=true" : "");
+    const extra = `word=${encodeURIComponent(word)}` + (FILTERS.teaser ? "&teaser=true" : "");
+    const url = withTime("/keywords/sides", extra);
     const res = await fetch(url);
     if (!res.ok) return null;
     return res.json();
@@ -611,10 +735,9 @@ window.addEventListener('load', () => markActiveNgram(filters.ngram));
 
 
 async function loadExtremeBubbles() {
-  const bubblesRes = await fetch(`/keywords/extreme-bubble?hours=${filters.hours}`);
+  const bubblesRes = await fetch(withTime("/keywords/extreme-bubble"));
   const bubbleData = await bubblesRes.json();
-
-  const biasRes = await fetch(`/keywords/bias-vector?hours=${filters.hours}`);
+  const biasRes = await fetch(withTime("/keywords/bias-vector"));
   const biasData = await biasRes.json();
 
   const container = document.getElementById("extremeKeywordBubbles");
@@ -723,15 +846,12 @@ function getBiasGradientColor(x, y) {
 
 
 async function loadWordcloud() {
-  const params = new URLSearchParams();
-  if (filters.hours) params.append("hours", filters.hours);
-  if (filters.source) params.append("source", filters.source);
-  if (filters.keyword) params.append("keyword", filters.keyword);
-  if (filters.teaser) params.append("teaser", "true");
-  if (filters.ngram) params.append("ngram", filters.ngram);  // 👈 NEU
-
-
-  const res = await fetch('/headlines/words?' + params.toString());
+  const qs = new URLSearchParams();
+  if (FILTERS.source)  qs.set("source", FILTERS.source);
+  if (FILTERS.keyword) qs.set("keyword", FILTERS.keyword);
+  if (FILTERS.teaser)  qs.set("teaser", "true");
+  if (FILTERS.ngram)   qs.set("ngram", String(FILTERS.ngram));
+  const res = await fetch(withTime("/headlines/words", qs.toString()));
   const data = await res.json();
 
   const words = data
@@ -812,8 +932,10 @@ async function loadWordcloud() {
 }
 
 
+
+
 async function loadMediaCompass() {
-  const res = await fetch("/media-positions");
+  const res = await fetch(withTime("/media-positions/filtered"));
   const data = await res.json();
   drawMediaCompass(data, "Medien");
 }
@@ -859,9 +981,9 @@ function drawMediaCompass(data, label = "Medien") {
 
         let url = "";
         if (selectedKeyword) {
-          url = `/headlines/by-keyword-and-source?word=${selectedKeyword}&source=${encodedMedium}`;
+          url = withTime("/headlines/by-keyword-and-source", `word=${encodeURIComponent(selectedKeyword)}&source=${encodedMedium}`);
         } else {
-          url = `/headlines/by-source?source=${encodedMedium}`;
+          url = withTime("/headlines/by-source", `source=${encodedMedium}`);
         }
 
         const res = await fetch(url);
@@ -890,28 +1012,24 @@ function drawMediaCompass(data, label = "Medien") {
 }
 
 
-
 function resetFilters() {
-  filters = {
-    hours: 72,
-    source: "",
-    keyword: "",
-    teaser: false,
-    ngram: 1
-  };
+  const endEx = nowExclusive();
+  FILTERS.from = toLocalIsoWithTZ(startOfDay(new Date(endEx.getTime() - 6*86400000)));
+  FILTERS.to   = toLocalIsoWithTZ(endEx);
+  FILTERS.source=""; FILTERS.keyword=""; FILTERS.teaser=false; FILTERS.ngram=1;
 
-  // UI zurücksetzen
   document.getElementById("sourceSelect").value = "";
   document.getElementById("keywordInput").value = "";
   document.getElementById("teaserToggle").checked = false;
 
   selectedKeyword = "";
-  loadFilteredArticles();
-  loadExtremeBubbles();
-  loadTopAbsoluteKeywords();
-  loadBlindspotFeed();
-
+  markActiveDays(7);
+  updateDateRangeBadge();
+  updateURLFromFilters(false);
+  applyFilters();
 }
+
+
 
 function getSelectedBubbleSort() {
   const select = document.getElementById("bubbleSort");
@@ -1035,121 +1153,88 @@ function renderKeywordDensityHeatmap(rawData, keyword = "") {
 
 
 async function loadKeywordDensity(keyword) {
-  const res = await fetch(`/media-positions/by-keyword?word=${encodeURIComponent(keyword)}&hours=${filters.hours}`);
+  const res = await fetch(withTime("/media-positions/by-keyword", `word=${encodeURIComponent(keyword)}`));
   const data = await res.json();
-  renderKeywordDensityHeatmap(data, keyword); // ✅ keyword wird mitgegeben
+  renderKeywordDensityHeatmap(data, keyword);
 }
-
-
 async function showKeywordHeatOverlay(keyword) {
-  const res = await fetch(`/media-positions/by-keyword?word=${encodeURIComponent(keyword)}&hours=${filters.hours}`);
+  const res = await fetch(withTime("/media-positions/by-keyword", `word=${encodeURIComponent(keyword)}`));
   const heatData = await res.json();
-
   renderKeywordDensityHeatmap(heatData);
-  filters.keyword = keyword;
+  FILTERS.keyword = keyword;
   selectedKeyword = keyword;
-
-  // optional: neue Bubble-Daten laden und zeichnen
-  loadExtremeBubbles(); // <- ruft renderKeywordScatterChart() intern auf
+  loadExtremeBubbles();
 }
-async function renderKeywordTimeline(keyword) {
-  const res = await fetch(
-    `/keywords/timeline?word=${encodeURIComponent(keyword)}&hours=${filters.hours}` +
-    (filters.teaser ? "&teaser=true" : "")
-  );
 
+async function renderKeywordTimeline(keyword) {
+  const extra = `word=${encodeURIComponent(keyword)}` + (FILTERS.teaser ? "&teaser=true" : "");
+  const res = await fetch(withTime("/keywords/timeline", extra));
+  if (!res.ok) return;
   const data = await res.json();
 
-  // Labels & Werte wie gehabt
-  const labels = data.map(d => new Date(d.time).toLocaleString("de-DE", {
-    day: "2-digit", month: "2-digit", hour: "2-digit"
-  }));
-  const values = data.map(d => d.count);
+  const chartWrap = document.getElementById('timelineChartWrap');   // <div id="timelineChartWrap"><canvas id="timelineChart"></canvas></div>
+  const canvas    = document.getElementById('timelineChart');
+  if (!chartWrap || !canvas) return;
 
-  // 🔎 NEU: Medien je Zeitbucket extrahieren (flexibel: sources[] ODER articles[].source)
-  const mediaByIndex = data.map(d => {
-    let list = [];
-    if (Array.isArray(d.sources)) list = d.sources;
-    else if (Array.isArray(d.articles)) list = d.articles.map(a => a.source).filter(Boolean);
-    // deduplizieren & sortieren
-    const uniq = Array.from(new Set(list));
-    // Optional: sortiere nach Häufigkeit, falls counts vorhanden sind
-    return uniq.sort((a, b) => a.localeCompare(b, "de"));
-  });
-
-  const ctx = document.getElementById("timelineChart").getContext("2d");
-
-  if (keywordTimelineChart instanceof Chart) {
-    keywordTimelineChart.destroy();
+  if (!data || data.length === 0 || data.every(p => (p.count||0) === 0)) {
+    mountChartEmptyOverlay(chartWrap, "Keine Timeline-Daten im gewählten Zeitraum");
+    // Optional: Canvas löschen
+    const ctx = canvas.getContext('2d'); ctx.clearRect(0,0,canvas.width,canvas.height);
+    return;
+  } else {
+    hideChartEmptyOverlay(chartWrap);
   }
 
-  keywordTimelineChart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [{
-        label: `📈 Verlauf: ${keyword}`,
-        data: values,
-        fill: false,
-        borderColor: "#3b82f6",
-        tension: 0.3,
-        pointRadius: 3,
-        pointHoverRadius: 5,
-      }]
-    },
-    options: {
-      responsive: true,
-      interaction: { mode: 'nearest', intersect: false },
-      plugins: {
-        tooltip: {
-          callbacks: {
-            // Titel = Zeitstempel
-            title: (items) => items?.[0]?.label ?? "",
-            // Hauptzeile = Nennungen gesamt
-            label: (ctx) => `Nennungen: ${ctx.parsed.y}`,
-            // 🔔 NEU: Liste der Medien darunter
-            afterBody: (items) => {
-              const idx = items?.[0]?.dataIndex ?? -1;
-              if (idx < 0) return [];
-              const media = mediaByIndex[idx] || [];
-              if (!media.length) return [];
-              const MAX = 12; // nicht zu lang machen
-              const head = "Medien:";
-              if (media.length <= MAX) {
-                return [head, ...media.map(m => `• ${m}`)];
-              }
-              // Falls sehr viele: die ersten N + „… und X weitere“
-              const shown = media.slice(0, MAX);
-              const rest = media.length - MAX;
-              return [head, ...shown.map(m => `• ${m}`), `… und ${rest} weitere`];
+  const bucket = inferBucketFromTimeline(data);
+  const labels = data.map(d => formatTickLabel(d.time, bucket));
+  const values = data.map(d => d.count);
+
+  // Falls du Chart.js nutzt:
+  if (!window.timelineChart) {
+    const ctx = canvas.getContext('2d');
+    // Annahme: Chart.js ist eingebunden. Wenn nicht, hier durch eigenen Renderer ersetzen.
+    window.timelineChart = new Chart(ctx, {
+      type: 'line',
+      data: { labels, datasets: [{ label: 'Vorkommen', data: values, tension: 0.25, fill: false }] },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) => {
+                const idx = items[0].dataIndex;
+                return labels[idx];
+              },
+              label: (item) => `Count: ${item.formattedValue}`
             }
           }
         },
-        legend: { display: true }
-      },
-      scales: {
-        x: { title: { display: true, text: 'Zeit' } },
-        y: { beginAtZero: true, title: { display: true, text: 'Nennungen' } }
+        scales: {
+          x: { ticks: { autoSkip: true, maxTicksLimit: 10 } },
+          y: { beginAtZero: true, ticks: { precision:0 } }
+        }
       }
-    }
-  });
+    });
+  } else {
+    window.timelineChart.data.labels = labels;
+    window.timelineChart.data.datasets[0].data = values;
+    window.timelineChart.update();
+  }
 }
 
 
 
 
 async function loadBlindspotFeed() {
-  const hours =
-    Number(filters.hours) ||
-    Number(document.querySelector('[data-hours].active')?.dataset.hours) ||
-    72;
-
-  const url = `/blindspots/keywords-feed?hours=${hours}&min_total=5&ratio_max=0.20`
-            + `&ngram=${filters.ngram ?? 1}`
-            + (filters.teaser ? "&teaser=true" : "");
-
-
-  const res = await fetch(url, { cache: "no-store" }); // verhindert Browser-Cache
+  const qs = new URLSearchParams({
+    min_total: "5",
+    ratio_max: "0.20",
+    ngram: String(FILTERS.ngram ?? 1)
+  });
+  if (FILTERS.teaser) qs.set("teaser", "true");
+  const url = withTime("/blindspots/keywords-feed", qs.toString());
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) return;
   const data = await res.json();
   renderBlindspotFeed(data);
@@ -1208,77 +1293,21 @@ function renderBlindspotFeed(data) {
 
 
 
-function getFiltersFromURL() {
-  const params = new URLSearchParams(window.location.search);
-
-  return {
-    hours: parseInt(params.get("hours")) || 72,
-    source: params.get("source") || "",
-    keyword: params.get("keyword") || "",
-    teaser: params.get("teaser") === "true",
-    ngram: parseInt(params.get("ngram")) || 1
-
-  };
-}
 
 
     async function loadFilteredMediaCompass() {
-      const params = new URLSearchParams();
-      if (filters.hours) params.append("hours", filters.hours);
-      if (filters.source) params.append("source", filters.source);
-      if (filters.keyword) params.append("keyword", filters.keyword);
-      if (filters.teaser) params.append("teaser", "true");
-
-      const res = await fetch("/media-positions/filtered?" + params.toString());
+      const qs = new URLSearchParams();
+      if (FILTERS.source)  qs.set("source", FILTERS.source);
+      if (FILTERS.keyword) qs.set("keyword", FILTERS.keyword);
+      if (FILTERS.teaser)  qs.set("teaser", "true");
+      const res = await fetch(withTime("/media-positions/filtered", qs.toString()));
       const data = await res.json();
       drawMediaCompass(data, "Gefilterte Medien");
     }
 
 
-function updateURLFromFilters() {
-  const params = new URLSearchParams();
-  if (filters.hours) params.set("hours", filters.hours);
-  if (filters.source) params.set("source", filters.source);
-  if (filters.keyword) params.set("keyword", filters.keyword);
-  if (filters.teaser) params.set("teaser", "true");
-  if (filters.ngram) params.set("ngram", String(filters.ngram));
-  const newURL = `${window.location.pathname}?${params.toString()}`;
-  window.history.replaceState({}, "", newURL);
-}
 
 
-
-    function setTimeFilter(h) {
-      filters.hours = h;
-      loadFilteredArticles();
-      loadExtremeBubbles();
-      loadTopAbsoluteKeywords();
-
-      if (filters.keyword) {
-        renderKeywordTimeline(filters.keyword);
-      }
-      loadBlindspotFeed();
-
-      // ✅ X/Y-Verteilung für aktuelles Keyword neu laden
-      if (filters.keyword) {
-        const box = document.getElementById("keywordSides");
-        if (box) {
-          box.innerHTML = "";
-          loadKeywordSides(filters.keyword)  // nutzt &hours intern
-            .then(sides => {
-              if (sides) {
-                renderKeywordSidesBars(box, sides);
-              } else {
-                box.textContent = "Keine Daten für dieses Keyword im aktuellen Zeitfenster.";
-              }
-            })
-            .catch(err => {
-              console.error(err);
-              box.textContent = "Fehler beim Laden der Verteilung.";
-            });
-        }
-      }
-    }
 
 
     // Event-Listener für die Quellen-Auswahl
@@ -1289,8 +1318,8 @@ function updateURLFromFilters() {
       loadTopAbsoluteKeywords();
       loadFilteredMediaCompass();
       updateFilterDisplay();
-      updateURLFromFilters();
       loadBlindspotFeed();
+      updateURLFromFilters(false);
     });
 
 
@@ -1303,8 +1332,8 @@ function updateURLFromFilters() {
       loadTopAbsoluteKeywords();
       loadFilteredMediaCompass();
       updateFilterDisplay();
-      updateURLFromFilters();
       loadBlindspotFeed();
+      updateURLFromFilters(false);
 
 
 
@@ -1312,26 +1341,8 @@ function updateURLFromFilters() {
 
 
 
-    window.onload = () => {
-
-      filters = getFiltersFromURL();
-
-      document.getElementById("sourceSelect").value = filters.source;
-      document.getElementById("keywordInput").value = filters.keyword;
-      document.getElementById("teaserToggle").checked = filters.teaser;
 
 
-      loadWordcloud();
-
-      loadMediaCompass();
-      loadFilteredArticles();
-      loadKeywordTrends();        // 🔼 Trends laden
-      loadExtremeBubbles();       // 🫧 Randmedienbegriffe laden
-      loadTopAbsoluteKeywords();
-      loadBlindspotFeed();
-
-    };
-    window.searchByKeyword = searchByKeyword;
 
 /* === Drawer öffnen/schließen === */
 const drawer = document.getElementById('filterDrawer');
@@ -1377,35 +1388,21 @@ function renderActiveFilterChips(){
     bar.appendChild(pill);
   };
 
-  // Stunden (zeigen wir immer; entfernbar nur, wenn ≠ 72)
-  const hoursLabel = `🕓 ${filters.hours}h`;
-  mk(hoursLabel, () => {
-    if (filters.hours !== 72){
-      filters.hours = 72;
-      loadFilteredArticles();
-      loadExtremeBubbles();
-      loadTopAbsoluteKeywords();
-      loadFilteredMediaCompass();
-      updateURLFromFilters();
-      loadBlindspotFeed();
-
-      // X/Y-Verteilung bei Reset auf 72h neu laden
-      if (filters.keyword) {
-        const box = document.getElementById("keywordSides");
-        if (box) {
-          box.innerHTML = "";
-          loadKeywordSides(filters.keyword)
-            .then(sides => {
-              if (sides) renderKeywordSidesBars(box, sides);
-              else box.textContent = "Keine Daten für dieses Keyword im aktuellen Zeitfenster.";
-            })
-            .catch(() => box.textContent = "Fehler beim Laden der Verteilung.");
-        }
-      }
-
-      renderActiveFilterChips();
-    }
-  }, { removable: filters.hours !== 72 });
+  // Zeitfenster (ganze Tage)
+  if (FILTERS.from && FILTERS.to) {
+    const f = new Date(FILTERS.from);
+    const t = new Date(new Date(FILTERS.to).getTime() - 1);
+    const fmt = new Intl.DateTimeFormat('de-DE', { day:'2-digit', month:'2-digit', year:'2-digit' });
+    mk(`📅 ${fmt.format(f)} – ${fmt.format(t)}`, () => {
+      const today = new Date();
+      FILTERS.from = toLocalIsoWithTZ(startOfDay(new Date(today.getTime() - 6*86400000)));
+      FILTERS.to   = toLocalIsoWithTZ(endOfDayExclusive(today));
+      markActiveDays(7);
+      updateDateRangeBadge();
+      updateURLFromFilters(false);
+      applyFilters();
+    });
+  }
 
   // Quelle
   if (filters.source){
@@ -1416,7 +1413,8 @@ function renderActiveFilterChips(){
       loadExtremeBubbles();
       loadTopAbsoluteKeywords();
       loadFilteredMediaCompass();
-      updateURLFromFilters();
+      loadBlindspotFeed();
+      updateURLFromFilters(false);
       renderActiveFilterChips();
     });
   } else {
@@ -1433,7 +1431,8 @@ function renderActiveFilterChips(){
       loadExtremeBubbles();
       loadTopAbsoluteKeywords();
       loadFilteredMediaCompass();
-      updateURLFromFilters();
+      loadBlindspotFeed();
+      updateURLFromFilters(false);
       renderActiveFilterChips();
     });
   }
@@ -1447,7 +1446,6 @@ function renderActiveFilterChips(){
       loadExtremeBubbles();
       loadTopAbsoluteKeywords();
       loadFilteredMediaCompass();
-      updateURLFromFilters();
       renderActiveFilterChips();
       loadBlindspotFeed();
     });
@@ -1460,14 +1458,14 @@ function renderActiveFilterChips(){
       filters.ngram = 1;
       loadWordcloud();
       loadFilteredMediaCompass();
-      updateURLFromFilters && updateURLFromFilters();
       renderActiveFilterChips();
     });
   }
 
 
   // Alle löschen (schneller Reset)
-  if (filters.source || filters.keyword || filters.teaser || filters.hours !== 72){
+  const dPreset = presetDaysFromRange();
+  if (filters.source || filters.keyword || filters.teaser || dPreset !== 7){
     const all = document.createElement('button');
     all.className = 'pill';
     all.type = 'button';
@@ -1504,19 +1502,36 @@ window.resetFilters = function(){
 };
 */
 
-// Zeit-Buttons markieren
-const timeBtns = Array.from(document.querySelectorAll('.drawer-section:nth-of-type(1) .btnrow button'));
-function markActiveTime(h) {
-  timeBtns.forEach(b => b.classList.remove('is-active'));
-  const map = {24:'24h',72:'72h',168:'7 Tage',720:'30 Tage'};
-  const btn = timeBtns.find(b => b.textContent.trim() === map[h]);
+const dayBtns = Array.from(document.querySelectorAll('.time-presets [data-days]'));
+
+function markActiveDays(d) {
+  dayBtns.forEach(b => b.classList.remove('is-active'));
+  const btn = dayBtns.find(b => parseInt(b.getAttribute('data-days'),10) === Number(d));
   if (btn) btn.classList.add('is-active');
 }
-const _setTimeFilter = window.setTimeFilter;
-window.setTimeFilter = function(h){
-  _setTimeFilter(h);
-  markActiveTime(h);
-};
+
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.time-presets [data-days]');
+  if (!btn) return;
+  const days = parseInt(btn.getAttribute('data-days'), 10);
+  if (Number.isNaN(days)) return;
+  onPresetDaysClick(days);
+}, true);
+
+function onPresetDaysClick(days){
+  const endEx = nowExclusive(); // JETZT (exklusiv)
+  const start = startOfDay(new Date(endEx.getTime() - days*86400000));
+
+  FILTERS.from = toLocalIsoWithTZ(start);
+  FILTERS.to   = toLocalIsoWithTZ(endEx);
+
+  markActiveDays(days);
+  updateDateRangeBadge();
+  updateURLFromFilters(false);
+  applyFilters();
+}
+
+
 
 // Bias-Buttons markieren
 const biasBtns = Array.from(document.querySelectorAll('#biasFilters button'));
@@ -1538,9 +1553,348 @@ window.setBiasFilter = function(name){
 
 // Initiale Markierung (nach load)
 window.addEventListener('load', () => {
-  markActiveTime(filters.hours);
+  const d = presetDaysFromRange();   // ermittelt 1/3/7/30 aus from/to, sonst null
+  if (d) markActiveDays(d);
   markActiveBias(window.activeBiasFilter || null);
 });
+
+
+  function inferBucketFromTimeline(data){
+    // Nimmt Timeline-Daten [{time, count}] und erkennt hour/day/week
+    if (!data || data.length < 2) return "hour";
+    const a = new Date(data[0].time).getTime();
+    const b = new Date(data[1].time).getTime();
+    const diffH = Math.round((b - a) / 3_600_000);
+    if (diffH === 1) return "hour";
+    if (diffH >= 24*7) return "week";
+    if (diffH >= 24) return "day";
+    return "hour";
+  }
+
+  function formatTickLabel(iso, bucket){
+    const d = new Date(iso);
+    if (bucket === "hour") {
+      const df = new Intl.DateTimeFormat('de-DE',{day:'2-digit',month:'2-digit'});
+      const tf = new Intl.DateTimeFormat('de-DE',{hour:'2-digit'});
+      return `${df.format(d)} ${tf.format(d)}h`;
+    }
+    if (bucket === "day") {
+      return new Intl.DateTimeFormat('de-DE',{weekday:'short', day:'2-digit', month:'2-digit'}).format(d);
+    }
+    if (bucket === "week") {
+      // Kalenderwoche grob als Montagsdatum anzeigen
+      return "KW " + weekOfYear(d);
+    }
+    return new Intl.DateTimeFormat('de-DE').format(d);
+  }
+
+  function weekOfYear(date){
+    // ISO-Woche (Mo-So)
+    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    const dayNum = (d.getUTCDay() + 6) % 7; // 0=Mo
+    d.setUTCDate(d.getUTCDate() - dayNum + 3);
+    const firstThursday = new Date(Date.UTC(d.getUTCFullYear(),0,4));
+    const week = 1 + Math.round(((d - firstThursday) / 86400000 - 3 + ((firstThursday.getUTCDay() + 6) % 7)) / 7);
+    return week;
+  }
+
+  // --- H: Empty-State Helpers -------------------------------------------------
+  function showEmptyState(container, message, hint){
+    if (!container) return;
+    container.innerHTML = `
+      <div class="empty-state">
+        ${message}
+        ${hint ? `<span class="hint">${hint}</span>` : ""}
+      </div>`;
+  }
+  function clearEmptyState(container){
+    if (!container) return;
+    container.innerHTML = "";
+  }
+
+  // Für Charts: Overlay auf einem umschließenden Relativ-Container
+  function mountChartEmptyOverlay(container, text="Keine Daten im gewählten Zeitraum"){
+    if (!container) return;
+    container.style.position = container.style.position || "relative";
+    let overlay = container.querySelector('.chart-overlay-empty');
+    if (!overlay){
+      overlay = document.createElement('div');
+      overlay.className = 'chart-overlay-empty';
+      overlay.textContent = text;
+      container.appendChild(overlay);
+    } else {
+      overlay.style.display = 'grid';
+      overlay.textContent = text;
+    }
+  }
+  function hideChartEmptyOverlay(container){
+    const ov = container?.querySelector?.('.chart-overlay-empty');
+    if (ov) ov.style.display = 'none';
+  }
+
+
+
+  function presetDaysFromRange() {
+    if (!(FILTERS.from && FILTERS.to)) return null;
+    const n = Math.round((new Date(FILTERS.to) - new Date(FILTERS.from)) / 86400000);
+    return [1,3,7,30].includes(n) ? n : null;
+  }
+
+  // 1) ganz oben irgendwo nach den Preset-Funktionen:
+  window.addEventListener('load', () => {
+    const d = presetDaysFromRange();
+    if (d) markActiveDays(d);
+  });
+
+  // 2) und weiter unten bei der kombinierten Initial-Markierung:
+  window.addEventListener('load', () => {
+    const d = presetDaysFromRange();
+    if (d) markActiveDays(d);
+    markActiveBias(window.activeBiasFilter || null);
+  });
+
+
+
+
+
+  function formatBadgeLabel(fromIso, toIso) {
+    try {
+      const f = new Date(fromIso);
+      const t = new Date(new Date(toIso).getTime() - 1);
+      const df = new Intl.DateTimeFormat('de-DE',{day:'2-digit',month:'2-digit',year:'2-digit'});
+      return `${(window.DATE_RANGE_SPEC?.I18N?.badgePrefix)||'📅'} ${df.format(f)} – ${df.format(t)}`;
+    } catch { return `${(window.DATE_RANGE_SPEC?.I18N?.badgePrefix)||'📅'} benutzerdefiniert`; }
+  }
+
+  function updateDateRangeBadge() {
+    const el = document.getElementById('date-range-badge');
+    if (!el) return;
+    if (FILTERS.from && FILTERS.to) {
+      el.style.display = 'inline-flex';
+      const label = el.querySelector('.label');
+      if (label) label.textContent = formatBadgeLabel(FILTERS.from, FILTERS.to);
+    } else {
+      el.style.display = 'none';
+    }
+  }
+
+  document.addEventListener('click', (e) => {
+    const rm = e.target.closest('#date-range-badge .remove');
+    if (!rm) return;
+    const endEx = nowExclusive();
+    FILTERS.from = toLocalIsoWithTZ(startOfDay(new Date(endEx.getTime() - 6*86400000)));
+    FILTERS.to   = toLocalIsoWithTZ(endEx);
+    markActiveDays(7);
+    updateDateRangeBadge();
+    updateURLFromFilters(false);
+    applyFilters();
+  }, true);
+
+
+
+  // ---- APPLY FILTERS: ALLE FETCHES SYNCHRON MIT from/to ODER hours ----------
+  // Suche in deinem Code alle Stellen, wo URLs gebaut werden, und hänge buildTimeQuery() an.
+  // Unten zwei typische Beispiele; passe sie an deine tatsächlichen Funktionen an.
+
+  async function fetchFilteredArticles() {
+    const base = '/articles/filtered';
+    const time = buildTimeQuery();
+    const qs = new URLSearchParams();
+    if (FILTERS.source)  qs.set('source', FILTERS.source);
+    if (FILTERS.keyword) qs.set('keyword', FILTERS.keyword);
+    if (FILTERS.teaser)  qs.set('teaser', '1');
+    const url = `${base}?${time}${qs.toString() ? '&' + qs.toString() : ''}`;
+    const res = await fetch(url);
+    return res.json();
+  }
+
+  async function fetchKeywordTimeline(word) {
+    const base = '/keywords/timeline';
+    const time = buildTimeQuery();
+    const qs = new URLSearchParams({ word });
+    // Optional: bucket=auto|hour|day|week (Standard: auto)
+    // qs.set('bucket', 'auto');
+    const url = `${base}?${time}&${qs.toString()}`;
+    const res = await fetch(url);
+    return res.json();
+  }
+
+
+
+  // --- G: Flatpickr Range-Picker mit Uhrzeit ---------------------------------
+  let fp = null;
+
+  function openCustomRangeModal() {
+    const modal = document.getElementById('customRangeModal');
+    modal.style.display = 'flex';
+    modal.setAttribute('aria-hidden', 'false');
+    modal.setAttribute('aria-modal', 'true');
+    // Fokus in das Eingabefeld
+    setTimeout(() => document.getElementById('fpRange').focus(), 0);
+  }
+
+  function closeCustomRangeModal() {
+    const modal = document.getElementById('customRangeModal');
+    modal.style.display = 'none';
+    modal.setAttribute('aria-hidden', 'true');
+    modal.setAttribute('aria-modal', 'false');
+    document.getElementById('btnCustomRange').focus();
+  }
+
+
+  function startOfDay(d) {
+    const x = new Date(d);
+    x.setHours(0,0,0,0);
+    return x;
+  }
+  function endOfDayExclusive(d) {
+    // exklusives Ende: 00:00 des FOLGETAGES
+    const x = new Date(d);
+    x.setHours(0,0,0,0);
+    x.setDate(x.getDate() + 1);
+    return x;
+  }
+  function toLocalIsoWithTZ(d) {
+    const pad = n => String(n).padStart(2,'0');
+    const offMin = -d.getTimezoneOffset();
+    const sign = offMin >= 0 ? '+' : '-';
+    const hh = pad(Math.floor(Math.abs(offMin)/60));
+    const mm = pad(Math.abs(offMin)%60);
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}${sign}${hh}:${mm}`;
+  }
+
+  // Liefert "jetzt" als exklusive Obergrenze (Sekunden=00 für Konsistenz)
+  function nowExclusive(){
+    const n = new Date();
+    n.setSeconds(0, 0);
+    return n;
+  }
+
+  // Klemmt einen [from, to)-Bereich so, dass 'to' niemals in der Zukunft liegt.
+  // Gibt {from:Date, to:Date} zurück (beide lokale Date-Objekte).
+  function clampRangeToNow(fromDate, toDate){
+    const now = nowExclusive();
+    // to darf nicht in der Zukunft liegen
+    const toClamped = (toDate > now) ? now : toDate;
+    // und muss strikt > from bleiben (sonst min. +1 Minute)
+    const minTo = new Date(fromDate.getTime() + 60*1000);
+    return {
+      from: fromDate,
+      to: (toClamped <= fromDate) ? minTo : toClamped
+    };
+  }
+
+  // Max-Range aus Spec holen (Fallback 180 Tage)
+  function getMaxRangeDays() {
+    return (window.DATE_RANGE_SPEC?.MAX_RANGE_DAYS ?? 180);
+  }
+
+  // Validierung: [from, to) und Max-Range
+  function validateRange(fDate, tDate) {
+    if (!fDate || !tDate) return { ok:false, msg: "Bitte Start und Ende wählen." };
+    if (tDate <= fDate)   return { ok:false, msg: "Ende muss nach Start liegen." };
+    const maxDays = getMaxRangeDays();
+    const diffDays = (tDate - fDate) / (1000 * 60 * 60 * 24);
+    if (diffDays > maxDays) return { ok:false, msg: `Zeitraum zu groß (max. ${maxDays} Tage).` };
+    const now = new Date();
+    if (fDate > now || tDate > now) return { ok:false, msg: "Zeiten in der Zukunft sind nicht erlaubt." };
+    return { ok:true };
+  }
+
+function initFlatpickr() {
+  const input = document.getElementById('fpRange');
+  if (!input) return;
+
+  if (window.flatpickr && window.flatpickr.l10ns && window.flatpickr.l10ns.de) {
+    flatpickr.localize(flatpickr.l10ns.de);
+  }
+
+  fp = flatpickr(input, {
+    mode: "range",
+    enableTime: false,          // <— KEINE Uhrzeit
+    time_24hr: true,            // egal, da keine Zeit
+    altInput: true,
+    altFormat: "d.m.Y",
+    dateFormat: "Y-m-d",        // nur Datum
+    defaultDate: (() => {
+      if (FILTERS.from && FILTERS.to) {
+        // FILTERS.to ist exklusiv -> -1 Tag für Anzeige
+        const f = startOfDay(new Date(FILTERS.from));
+        const tExclusive = new Date(FILTERS.to);
+        const tDisplay = new Date(tExclusive.getTime() - 1); // 1ms zurück in den Vortag
+        return [f, tDisplay];
+      }
+      // Fallback: letzte 7 Tage inkl. heute
+      const today = new Date();
+      const from  = startOfDay(new Date(today.getTime() - 6*86400000));
+      return [from, today];
+    })(),
+    maxDate: new Date(),
+    onOpen: () => {
+      if (FILTERS.from && FILTERS.to) {
+        const f = startOfDay(new Date(FILTERS.from));
+        const tDisplay = new Date(new Date(FILTERS.to).getTime() - 1);
+        fp.setDate([f, tDisplay], false);
+      }
+    }
+  });
+}
+
+// Modal-Buttons
+document.addEventListener('click', (e) => {
+  if (e.target.matches('#btnCustomRange')) {
+    e.preventDefault();
+    openCustomRangeModal();
+    if (!fp) initFlatpickr();
+  }
+  if (e.target.matches('#btnRangeClose') || e.target.matches('#btnRangeCancel')) {
+    e.preventDefault();
+    closeCustomRangeModal();
+  }
+  // … innerhalb deines Click-Handlers für #btnRangeApply:
+  if (e.target.matches('#btnRangeApply')) {
+    e.preventDefault();
+    if (!fp) { closeCustomRangeModal(); return; }
+    const sel = fp.selectedDates || [];
+    if (sel.length < 2) { alert("Bitte Start und Ende wählen."); return; }
+
+    const f = startOfDay(sel[0]);
+    const chosenEndExclusive = endOfDayExclusive(sel[1]); // 00:00 Folgetag
+    const endEx = nowExclusive();
+    const toEx  = (chosenEndExclusive > endEx) ? endEx : chosenEndExclusive;
+
+    if (toEx <= f) { alert("Ende muss nach Start liegen."); return; }
+
+    FILTERS.from = toLocalIsoWithTZ(f);
+    FILTERS.to   = toLocalIsoWithTZ(toEx);
+
+    const cb = document.getElementById('cbIncludeTeaserInRange');
+    if (cb) FILTERS.teaser = !!cb.checked;
+
+    markActiveDays(null);
+    updateDateRangeBadge();
+    updateURLFromFilters(false);
+    applyFilters();
+    closeCustomRangeModal();
+  }
+
+}, true);
+
+
+// ESC schließt Modal
+document.addEventListener('keydown', (e) => {
+  const modal = document.getElementById('customRangeModal');
+  if (modal?.style.display === 'flex' && e.key === 'Escape') {
+    closeCustomRangeModal();
+  }
+});
+
+// Bei erstem Load Picker vorbereiten (nicht öffnen)
+window.addEventListener('DOMContentLoaded', () => {
+  // Nur initialisieren, wenn du willst dass der Picker sofort bereit ist:
+  // initFlatpickr();
+});
+
 
   </script>
 </body>

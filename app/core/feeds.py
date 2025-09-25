@@ -69,7 +69,6 @@ FEEDS = {
     "Compact": "https://www.compact-online.de/feed/",
     "Epoch Times": "https://www.epochtimes.de/rss",
     "Blätter für deutsche und internationale Politik": "https://www.blaetter.de/rss.xml",
-    "Stuttgarter Zeitung": "https://www.stuttgarter-zeitung.de/schlagzeilen.rss.feed",
 }
 
 
@@ -136,7 +135,7 @@ def _to_article_schema(entry, source_name: str) -> ArticleSchema | None:
     )
 
 
-def fetch_articles(limit_per_feed: int = 25) -> List[ArticleSchema]:
+def fetch_articles(limit_per_feed: int = 250) -> List[ArticleSchema]:
     """
     Lädt alle FEEDS und gibt eine Liste von ArticleSchema zurück.
     Fehlerhafte Feeds/Einträge werden geloggt und übersprungen.
@@ -163,7 +162,7 @@ def fetch_articles(limit_per_feed: int = 25) -> List[ArticleSchema]:
     return items
 
 
-def fetch_articles_from_source(source_name: str, limit: int = 5) -> List[ArticleSchema]:
+def fetch_articles_from_source(source_name: str, limit: int = 25) -> List[ArticleSchema]:
     """
     Lädt einen einzelnen Feed (per Name in FEEDS) und gibt ArticleSchema-Objekte zurück.
     """
