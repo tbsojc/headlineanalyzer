@@ -295,7 +295,7 @@ def fetch_source(source: str = Query(...), db: Session = Depends(get_db)):
 @router.get("/articles/filtered", response_model=list[ArticleSchema])
 def filtered_articles(
     hours: int = Query(72),
-    source: str | None = Query(None),
+    source: list[str] | None = Query(None),   # ← Liste statt str
     keyword: str | None = Query(None),
     teaser: bool = Query(False),
     from_: str | None = Query(None, alias="from"),
@@ -309,17 +309,19 @@ def filtered_articles(
         db, hours, from_, to,
         unbounded=True, order="desc", request=request
     )
-    articles = arts  # konsistent bleiben
+    articles = arts
 
-    # Quelle
+    # Quellen-Filter (Mehrfach): akzeptiert mehrere ?source=… Vorkommen
     if source:
-        s = source.strip().lower()
-        df = load_media_df()
-        label2norm = dict(zip(df["Medium"].str.strip().str.lower(), df["norm_name"]))
-        valid = {s, label2norm.get(s, s)}   # akzeptiere Label ODER norm_name
-        articles = [a for a in articles if (a.source or "").strip().lower() in valid]
+        wanted = {s.strip().lower() for s in source if s and s.strip()}
+        if wanted:
+            # Map Label→norm_name zulassen (wie zuvor)
+            df = load_media_df()
+            label2norm = dict(zip(df["Medium"].str.strip().str.lower(), df["norm_name"]))
+            valid = wanted | {label2norm.get(s, s) for s in wanted}
+            articles = [a for a in articles if (a.source or "").strip().lower() in valid]
 
-    # Keyword (Titel; optional Teaser)
+    # Keyword (wie gehabt) …
     if keyword:
         import re
         pat = re.compile(rf"\b{re.escape(keyword.strip().lower())}\b")
@@ -329,10 +331,10 @@ def filtered_articles(
             return bool(pat.search(title) or (te and pat.search(te)))
         articles = [a for a in articles if match(a)]
     elif teaser:
-        # Nur Teaser-Artikel anzeigen (wenn kein Keywordfilter)
         articles = [a for a in articles if a.teaser]
 
     return articles
+
 
 
 # -----------------------------
@@ -341,50 +343,54 @@ def filtered_articles(
 @router.get("/media-positions/filtered")
 def media_positions_filtered(
     hours: int = Query(72),
-    source: str = Query(None),
+    source: list[str] | None = Query(None),   # Mehrfachquellen
     keyword: str = Query(None),
     teaser: bool = Query(False),
-    from_: str | None = Query(None, alias="from"),   # NEU
-    to: str | None = Query(None),                     # NEU
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
     from collections import Counter
+    import re
 
+    # Zeitfenster + Artikel holen
     tw = _time_window_or_400(hours, from_, to)
-    hours_eff = tw["hours"] if tw["mode"] == "hours" else max(
-        int((tw["to"] - tw["from"]).total_seconds() // 3600), 1
-    )
-
-    df = load_media_df()
     articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
 
+    # Quellenfilter (Mehrfach)
     if source:
-        articles = [a for a in articles if a.source.strip().lower() == source.strip().lower()]
+        wanted = { (s or "").strip().lower() for s in source if s and s.strip() }
+        if wanted:
+            articles = [a for a in articles if ((a.source or "").strip().lower() in wanted)]
 
+    # Keyword-Filter: Unterstützung für "term1+term2"
     if keyword:
         terms = [t.strip().lower() for t in keyword.split('+') if t.strip()]
+        patterns = [re.compile(rf"\b{re.escape(t)}\b") for t in terms]
 
         def match(a):
-            txt = a.title.lower()
+            txt = (a.title or "").lower()
             if teaser and a.teaser:
-                txt += " " + a.teaser.lower()
-            import re
-            return all(re.search(rf"\b{re.escape(t)}\b", txt) for t in terms)
+                txt += " " + (a.teaser or "").lower()
+            return all(p.search(txt) for p in patterns)
 
         articles = [a for a in articles if match(a)]
 
-
-    matching_sources = [a.source.strip().lower() for a in articles]
+    # Häufigkeiten pro Medium sammeln
+    matching_sources = [ (a.source or "").strip().lower() for a in articles if a.source ]
     source_counts = Counter(matching_sources)
 
+    # ⚠️ Hier fehlte das DataFrame:
+    df = load_media_df()  # <-- hinzufügen
     filtered = df[df["norm_name"].isin(source_counts.keys())]
 
+    # Rückgabeformat für den Scatter
     return [
         {
             "medium": row["Medium"],
             "x": row["Systemnähe (X)"],
             "y": row["Globalismus (Y)"],
-            "count": source_counts[row["norm_name"]],
+            "count": int(source_counts.get(row["norm_name"], 0)),
         }
         for _, row in filtered.iterrows()
     ]
@@ -675,12 +681,12 @@ def keywords_top_absolute(
 @router.get("/headlines/words")
 def headlines_words(
     hours: int = Query(72),
-    source: str | None = Query(None),
+    source: list[str] | None = Query(None),    # ← Liste statt str
     keyword: str | None = Query(None),
     teaser: bool = Query(False),
     ngram: int = Query(1, ge=1, le=3),
-    from_: str | None = Query(None, alias="from"),   # NEU
-    to: str | None = Query(None),                     # NEU
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
     db: Session = Depends(get_db),
     request: Request = None
 ):
@@ -700,8 +706,10 @@ def headlines_words(
 
     # Quelle filtern
     if source:
-        s = source.strip().lower()
-        arts = [a for a in arts if a.source.strip().lower() == s]
+        wanted = {s.strip().lower() for s in source if s and s.strip()}
+        if wanted:
+            arts = [a for a in arts if (a.source or "").strip().lower() in wanted]
+
 
     # optional: Keyword-Filter (wie /articles/filtered)
     import re

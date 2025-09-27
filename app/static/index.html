@@ -69,9 +69,27 @@
   </section>
 
   <section class="drawer-section">
+    <h4>Medien-Bias</h4>
+    <div id="biasFilters" class="btn-row">
+      <button type="button" data-bias="systemkritisch">Systemkritisch</button>
+      <button type="button" data-bias="systemnah">Systemnah</button>
+      <button type="button" data-bias="globalistisch">Globalistisch</button>
+      <button type="button" data-bias="nationalistisch">Nationalistisch</button>
+      <button type="button" id="biasClearBtn">Alle</button>
+    </div>
+  </section>
+
+
+  <section class="drawer-section">
     <h4>Quelle</h4>
+    <div class="multiselect" id="sourceMultiSelect">
+      <button type="button" id="sourceMultiBtn">Alle Quellen</button>
+      <div class="multiselect-panel" id="sourcePanel" hidden>
+        <!-- wird per JS aus den bisherigen <option>-Werten befüllt -->
+      </div>
+    </div>
     <!-- Nutze dein bestehendes Select mit den gleichen Optionen -->
-    <select id="sourceSelect">
+    <select id="sourceSelect" style="display:none">
       <option value="">-- Alle Quellen --</option>
       <option value="Zeit">Zeit</option>
       <option value="Spiegel">Spiegel</option>
@@ -296,6 +314,9 @@
       ngram: 1
     };
 
+    const ACTIVE_SOURCES = new Set();        // ← neue Mehrfachauswahl
+    const activeBiasFilters = new Set();     // ← ersetzt Single-Bias
+
     // Kompatibilität: alter Code darf noch "filters" benutzen
     Object.defineProperty(window, 'filters', {
       get() { return FILTERS; },
@@ -336,6 +357,72 @@
       loadBlindspotFeed();
     });
 
+function initSourcePanelFromSelect() {
+  const sel = document.getElementById('sourceSelect');
+  const panel = document.getElementById('sourcePanel');
+  if (!sel || !panel) return;
+
+  // Aus vorhandenen <option>-Werten Checkboxen bauen
+  const frag = document.createDocumentFragment();
+  Array.from(sel.options).forEach(opt => {
+    if (!opt.value) return; // "-- Alle Quellen --"
+    const id = `src_${opt.value.replace(/\s+/g,'_')}`;
+    const label = document.createElement('label');
+    label.setAttribute('for', id);
+    label.innerHTML = `<input type="checkbox" id="${id}" class="source-box" value="${opt.value}">
+                       ${opt.textContent}`;
+    frag.appendChild(label);
+  });
+  panel.replaceChildren(frag);
+}
+
+function updateSourceBtnLabel(){
+  const btn = document.getElementById('sourceMultiBtn');
+  const n = ACTIVE_SOURCES.size;
+  btn.textContent = n === 0 ? 'Alle Quellen' : `${n} ausgewählt`;
+}
+
+function appendSources(qs){
+  // mehrere ?source=… Parameter anhängen
+  if (ACTIVE_SOURCES.size === 0) return;
+  for (const s of ACTIVE_SOURCES) qs.append('source', s);
+}
+
+
+// Panel togglen
+document.getElementById('sourceMultiBtn').addEventListener('click', () => {
+  const p = document.getElementById('sourcePanel');
+  p.hidden = !p.hidden;
+});
+document.addEventListener('click', (e) => {
+  const btn = document.getElementById('sourceMultiBtn');
+  const panel = document.getElementById('sourcePanel');
+  if (!panel.contains(e.target) && e.target !== btn) panel.hidden = true;
+});
+
+// Checkbox-Änderungen
+document.getElementById('sourcePanel').addEventListener('change', (e) => {
+  if (!e.target.classList.contains('source-box')) return;
+  const val = e.target.value;
+  if (e.target.checked) ACTIVE_SOURCES.add(val);
+  else ACTIVE_SOURCES.delete(val);
+  updateSourceBtnLabel();
+  updateURLFromFilters(false);  // URL sync (s. 2.5)
+  applyFilters();
+});
+
+// Init beim Laden: aus <select> Checkboxen bauen
+window.addEventListener('load', () => {
+  initSourcePanelFromSelect();
+  // Vorbelegung aus URL (s. 2.5) setzt ACTIVE_SOURCES; danach UI labeln & Häkchen setzen:
+  const panel = document.getElementById('sourcePanel');
+  Array.from(panel.querySelectorAll('.source-box')).forEach(cb => {
+    cb.checked = ACTIVE_SOURCES.has(cb.value);
+  });
+  updateSourceBtnLabel();
+});
+
+
 
   function getFiltersFromURL() {
     const p = new URLSearchParams(location.search);
@@ -359,6 +446,14 @@
       const defFrom = startOfDay(new Date(endEx.getTime() - 6 * 86400000));
       FILTERS.from = toLocalIsoWithTZ(defFrom);
       FILTERS.to   = toLocalIsoWithTZ(endEx);
+      // Mehrere ?source=… auslesen
+      const p = new URLSearchParams(location.search);
+      const sources = p.getAll('source');    // ← alle Vorkommen
+      ACTIVE_SOURCES.clear();
+      for (const s of sources) if (s && s.trim()) ACTIVE_SOURCES.add(s.trim());
+
+      // Abwärtskompatibilität: ersten Eintrag auch in FILTERS.source spiegeln
+      FILTERS.source = sources.length ? sources[0] : null;
     }
   }
 
@@ -366,7 +461,9 @@
     const p = new URLSearchParams();
     p.set('from', FILTERS.from);
     p.set('to',   FILTERS.to);
-    if (FILTERS.source)  p.set('source', FILTERS.source);
+    if (ACTIVE_SOURCES.size > 0) {
+      for (const s of ACTIVE_SOURCES) p.append('source', s);
+    }
     if (FILTERS.keyword) p.set('keyword', FILTERS.keyword);
     if (FILTERS.teaser)  p.set('teaser', '1');
     const url = `?${p.toString()}`;
@@ -447,7 +544,7 @@ async function searchByKeyword(kw = null) {
 
 async function loadFilteredArticles(page = 1) {
   const qs = new URLSearchParams();
-  if (FILTERS.source)  qs.set("source", FILTERS.source);
+  appendSources(qs);
   if (FILTERS.keyword) qs.set("keyword", FILTERS.keyword);
   if (FILTERS.teaser)  qs.set("teaser", "true");
   qs.set("page", String(page));
@@ -609,36 +706,47 @@ async function loadTopAbsoluteKeywords() {
 
   }
 
-  // Setter für den Bias-Filter: setzt den Filter und triggert die Aktualisierung
-  function setBiasFilter(filterName) {
-    activeBiasFilter = filterName || null;
-    // (Optional: Buttons visuell markieren)
-    try {
-      document.querySelectorAll('#biasFilters button').forEach(btn => {
-        btn.classList.toggle('active', btn.textContent.toLowerCase().includes(filterName ?? 'alle'));
-      });
-    } catch (_) {}
-    applyFilters();
-  }
-
-  // EINZIGE Version der Prüf-Funktion
-  function biasPassesFilter(bias) {
-    // Kein aktiver Filter → alles zulassen
-    if (!activeBiasFilter) return true;
-
-    // Aktiver Filter → nur Elemente mit gültigem Bias zulassen
-    if (!bias || !Number.isFinite(bias.x) || !Number.isFinite(bias.y)) return false;
-
-    const { x, y } = bias;
-
-    switch (activeBiasFilter) {
-      case 'systemkritisch':   return x <= -0.1;
-      case 'systemnah':        return x >=  0.1;
-      case 'globalistisch':    return y >=  0.1;
-      case 'nationalistisch':  return y <= -0.1;
-      default:                 return true;
+// Setter für den Bias-Filter: setzt/toggelt den Filter und triggert die Aktualisierung
+function setBiasFilter(filterName) {
+  if (!filterName || filterName === 'alle') {
+    activeBiasFilters.clear();
+  } else {
+    if (activeBiasFilters.has(filterName)) {
+      activeBiasFilters.delete(filterName);
+    } else {
+      activeBiasFilters.add(filterName);
     }
   }
+
+  // Buttons visuell markieren
+  document.querySelectorAll('#biasFilters button[data-bias]').forEach(btn => {
+    const key = btn.dataset.bias;
+    btn.classList.toggle('active', activeBiasFilters.has(key));
+  });
+
+  applyFilters();
+}
+
+// EINZIGE Version der Prüf-Funktion (Multi-Auswahl, ODER-Logik)
+function biasPassesFilters(bias) {
+  // Keine aktiven Filter → alles zulassen
+  if (activeBiasFilters.size === 0) return true;
+
+  // Ungültiger Bias → blockieren
+  if (!bias || !Number.isFinite(bias.x) || !Number.isFinite(bias.y)) return false;
+
+  const { x, y } = bias;
+
+  // ODER-Logik: reicht, wenn eine Bedingung passt
+  for (const f of activeBiasFilters) {
+    if (f === 'systemkritisch'   && x <= -0.1) return true;
+    if (f === 'systemnah'        && x >=  0.1) return true;
+    if (f === 'globalistisch'    && y >=  0.1) return true;
+    if (f === 'nationalistisch'  && y <= -0.1) return true;
+  }
+  return false;
+}
+
 
 function setNgram(n){
   filters.ngram = n;
@@ -755,7 +863,7 @@ async function loadExtremeBubbles() {
   });
 
   // Filter anwenden
-  bubbles = bubbles.filter(({ bias }) => biasPassesFilter(bias));
+  bubbles = bubbles.filter(({ bias }) => biasPassesFilters(bias));
 
   // Sortieren
   bubbles.sort((a, b) => {
@@ -849,7 +957,7 @@ function getBiasGradientColor(x, y) {
 
 async function loadWordcloud() {
   const qs = new URLSearchParams();
-  if (FILTERS.source)  qs.set("source", FILTERS.source);
+  appendSources(qs);
   if (FILTERS.keyword) qs.set("keyword", FILTERS.keyword);
   if (FILTERS.teaser)  qs.set("teaser", "true");
   if (FILTERS.ngram)   qs.set("ngram", String(FILTERS.ngram));
@@ -977,20 +1085,20 @@ function drawMediaCompass(data, label = "Medien") {
 
         const point = elements[0];
         const medium = mediaCompassChart.data.datasets[point.datasetIndex].data[point.index].label;
-        filters.source = medium;
-        loadFilteredArticles();
-        const encodedMedium = encodeURIComponent(medium);
+        // Toggle der Quelle in der Mehrfachauswahl
+        if (ACTIVE_SOURCES.has(medium)) ACTIVE_SOURCES.delete(medium);
+        else ACTIVE_SOURCES.add(medium);
 
-        let url = "";
-        if (selectedKeyword) {
-          url = withTime("/headlines/by-keyword-and-source", `word=${encodeURIComponent(selectedKeyword)}&source=${encodedMedium}`);
-        } else {
-          url = withTime("/headlines/by-source", `source=${encodedMedium}`);
-        }
+        // Optional: ersten Eintrag nach FILTERS.source spiegeln (Abwärtskompatibilität)
+        FILTERS.source = ACTIVE_SOURCES.size ? Array.from(ACTIVE_SOURCES)[0] : null;
 
-        const res = await fetch(url);
-        const articles = await res.json();
-        renderHeadlineList(articles);
+        // UI-Checkbox synchronisieren
+        const cb = document.querySelector(`#sourcePanel .source-box[value="${CSS.escape(medium)}"]`);
+        if (cb) cb.checked = ACTIVE_SOURCES.has(medium);
+
+        updateSourceBtnLabel();
+        updateURLFromFilters(false);
+        applyFilters();
       },
       plugins: {
         tooltip: {
@@ -1019,6 +1127,11 @@ function resetFilters() {
   FILTERS.from = toLocalIsoWithTZ(startOfDay(new Date(endEx.getTime() - 6*86400000)));
   FILTERS.to   = toLocalIsoWithTZ(endEx);
   FILTERS.source=""; FILTERS.keyword=""; FILTERS.teaser=false; FILTERS.ngram=1;
+  ACTIVE_SOURCES.clear();
+  updateSourceBtnLabel();
+  const panel = document.getElementById('sourcePanel');
+  if (panel) panel.querySelectorAll('.source-box').forEach(cb => cb.checked = false);
+
 
   document.getElementById("sourceSelect").value = "";
   document.getElementById("keywordInput").value = "";
@@ -1356,7 +1469,7 @@ function renderBlindspotFeed(data) {
 
     async function loadFilteredMediaCompass() {
       const qs = new URLSearchParams();
-      if (FILTERS.source)  qs.set("source", FILTERS.source);
+      appendSources(qs);
       if (FILTERS.keyword) qs.set("keyword", FILTERS.keyword);
       if (FILTERS.teaser)  qs.set("teaser", "true");
       const res = await fetch(withTime("/media-positions/filtered", qs.toString()));
@@ -1464,21 +1577,24 @@ function renderActiveFilterChips(){
   }
 
   // Quelle
-  if (filters.source){
-    mk(`📰 ${filters.source}`, () => {
-      filters.source = '';
-      const sel = document.getElementById('sourceSelect'); if (sel) sel.value = '';
-      loadFilteredArticles();
-      loadExtremeBubbles();
-      loadTopAbsoluteKeywords();
-      loadFilteredMediaCompass();
-      loadBlindspotFeed();
-      updateURLFromFilters(false);
-      renderActiveFilterChips();
-    });
+  if (ACTIVE_SOURCES.size > 0) {
+    for (const s of Array.from(ACTIVE_SOURCES).sort()) {
+      mk(`📰 ${s}`, () => {
+        ACTIVE_SOURCES.delete(s);
+        // Checkbox sync
+        const cb = document.querySelector(`#sourcePanel .source-box[value="${CSS.escape(s)}"]`);
+        if (cb) cb.checked = false;
+        // Abwärtskompatibilität: FILTERS.source auf ersten Eintrag setzen/entfernen
+        FILTERS.source = ACTIVE_SOURCES.size ? Array.from(ACTIVE_SOURCES)[0] : null;
+        updateSourceBtnLabel();
+        updateURLFromFilters(false);
+        applyFilters();
+      });
+    }
   } else {
     mk('📰 Alle Quellen', null, { removable:false, ghost:true });
   }
+
 
   // Keyword
   if (filters.keyword){

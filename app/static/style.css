@@ -287,23 +287,40 @@ input[type="text"]:focus, select:focus { border-color: #3b82f6; }
 }
 
 /* === Drawer: bessere Lesbarkeit & Kontrast === */
-.drawer { background:#fff; }
+.drawer {
+  width: 50vw;           /* Hälfte des Viewports */
+  max-width: 50vw;       /* nicht kleiner begrenzen */
+  min-width: 340px;      /* falls Bildschirm sehr schmal ist */
+  padding: 1.5rem;       /* großzügiger Innenabstand */
+  font-size: 1rem;       /* etwas größere Schrift */
+  overflow-y: auto;      /* Scrollbar falls Inhalt zu hoch */
+}
 .drawer-section h4 {
-  font-size: .95rem;
+  font-size: 1.15rem;
   font-weight: 600;
   color: #0f172a;           /* viel dunkler */
   margin: .25rem 0 .5rem;
+  margin-bottom: 0.75rem;
+}
+
+/* Buttons lockerer anordnen */
+.btnrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
 }
 
 /* Grundstil für Filter-Buttons im Drawer */
 .btnrow button {
+  flex: 1 1 45%;
   appearance: none;
   border: 1px solid #cbd5e1; /* klarere Kontur */
   background: #ffffff;       /* weiß statt grau */
   color: #0f172a;
-  border-radius: 10px;
-  padding: .55rem .85rem;
-  font-size: .95rem;
+  border-radius: 0.6rem;
+  padding: 0.75rem 1rem;
+  font-size: 1rem;
   line-height: 1;
   cursor: pointer;
   box-shadow: 0 1px 0 rgba(15,23,42,.04);
@@ -542,3 +559,8 @@ input[type="text"]:focus, select:focus { border-color: #3b82f6; }
 .alert-error { background: #fef2f2; color: #7f1d1d; border-color: #fecaca; }
 .alert-info  { background: #eff6ff; color: #1e3a8a; border-color: #bfdbfe; }
 .alert .close { margin-left: auto; cursor: pointer; font-weight: 700; }
+
+.multiselect { position: relative; display: inline-block; }
+.multiselect-panel { position: absolute; z-index: 10; background: #fff; border: 1px solid #ccc; padding: .5rem; max-height: 260px; overflow: auto; min-width: 240px; }
+.multiselect-panel label { display: block; margin: .25rem 0; cursor: pointer; }
+.multiselect-panel input { margin-right: .5rem; }
