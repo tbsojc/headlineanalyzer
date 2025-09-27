@@ -68,18 +68,6 @@
     </div>
   </section>
 
-
-  <section class="drawer-section">
-    <h4>Bias</h4>
-    <div class="btnrow" id="biasFilters">
-      <button onclick="setBiasFilter('systemkritisch')">Systemkritisch</button>
-      <button onclick="setBiasFilter('systemnah')">Systemnah</button>
-      <button onclick="setBiasFilter('globalistisch')">Globalistisch</button>
-      <button onclick="setBiasFilter('nationalistisch')">Nationalistisch</button>
-      <button onclick="setBiasFilter(null)">Alle</button>
-    </div>
-  </section>
-
   <section class="drawer-section">
     <h4>Quelle</h4>
     <!-- Nutze dein bestehendes Select mit den gleichen Optionen -->
@@ -211,14 +199,26 @@
 
   </div>
 
-  <div id="filteredArticles"></div>
 
-<section class="chart-box">
+
+<section class="chart-box" id="keywordSidesBox">
   <h2>🧭 Keyword-Verteilung (X/Y)</h2>
+
+  <!-- Balken -->
   <div id="keywordSides"></div>
+
+  <!-- Heatmap darunter, groß -->
+  <div id="keywordHeatMiniWrap"
+       style="position:relative;width:100%;height:560px;margin-top:16px;
+              border:1px solid #eee;border-radius:12px;background:#fff;overflow:hidden;">
+    <svg id="keywordHeatMini" style="position:absolute;inset:0;"></svg>
+    <div id="keywordHeatMiniEmpty" class="chart-overlay-empty" style="display:none;">
+      Keine Heatmap-Daten
+    </div>
+  </div>
 </section>
 
-
+  <div id="filteredArticles"></div>
 
 <section id="extremeBubbles" class="bubble-section">
   <h2>🫧 Exklusive Begriffe aus Randmedien</h2>
@@ -417,6 +417,7 @@ async function searchByKeyword(kw = null) {
     const sides = await loadKeywordSides(keyword);
     if (sides) {
       renderKeywordSidesBars(box, sides);
+      await loadKeywordDensityMini(keyword);   // ← Mini-Heatmap rechts
       // optional: box.scrollIntoView({ behavior: "smooth", block: "start" });
     } else {
       box.textContent = "Keine Daten für dieses Keyword im aktuellen Zeitfenster.";
@@ -424,6 +425,7 @@ async function searchByKeyword(kw = null) {
   } catch (err) {
     console.error(err);
     box.textContent = "Fehler beim Laden der Verteilung.";
+    showMiniEmpty("Fehler beim Laden");
   }
 }
 
@@ -1165,6 +1167,63 @@ async function showKeywordHeatOverlay(keyword) {
   selectedKeyword = keyword;
   loadExtremeBubbles();
 }
+
+async function loadKeywordDensityMini(keyword) {
+  const res = await fetch(withTime("/media-positions/by-keyword",
+                   `word=${encodeURIComponent(keyword)}`));
+  if (!res.ok) { showMiniEmpty("Fehler beim Laden"); return; }
+  const data = await res.json();
+  renderKeywordDensityHeatmapIn("keywordHeatMini", "keywordHeatMiniWrap", data);
+}
+
+function showMiniEmpty(msg){
+  const svg = document.getElementById("keywordHeatMini");
+  if (svg) svg.innerHTML = "";
+  const ov = document.getElementById("keywordHeatMiniEmpty");
+  if (ov){ ov.style.display = "grid"; ov.textContent = msg || "Keine Heatmap-Daten"; }
+}
+function hideMiniEmpty(){
+  const ov = document.getElementById("keywordHeatMiniEmpty");
+  if (ov) ov.style.display = "none";
+}
+
+function renderKeywordDensityHeatmapIn(svgId, wrapId, rawData){
+  const svg = d3.select(`#${svgId}`);
+  svg.selectAll("*").remove();
+
+  const wrap = document.getElementById(wrapId);
+  if (!wrap || !rawData || !rawData.length){ showMiniEmpty(); return; }
+  hideMiniEmpty();
+
+  const width = wrap.clientWidth, height = wrap.clientHeight;
+  svg.attr("width", width).attr("height", height).attr("viewBox", `0 0 ${width} ${height}`);
+
+  const xScale = d3.scaleLinear().domain([-1, 1]).range([0, width]);
+  const yScale = d3.scaleLinear().domain([-1, 1]).range([height, 0]);
+
+  const points = rawData.flatMap(d => {
+    const c = Math.min(30, Math.round(Math.log1p(d.count) * 5));
+    if (!Number.isFinite(d.x) || !Number.isFinite(d.y)) return [];
+    return Array(c).fill({ x: xScale(d.x), y: yScale(d.y) });
+  });
+  if (!points.length){ showMiniEmpty(); return; }
+
+  const densityData = d3.contourDensity()
+    .x(d => d.x).y(d => d.y)
+    .size([width, height]).bandwidth(40).thresholds(16)(points);
+
+  const color = d3.scaleSequential(d3.interpolateYlOrRd)
+    .domain([0, d3.max(densityData, d => d.value)]);
+
+  svg.selectAll("path")
+    .data(densityData)
+    .join("path")
+    .attr("d", d3.geoPath())
+    .attr("fill", d => color(d.value))
+    .attr("stroke", "#fff")
+    .attr("stroke-width", 0.3);
+}
+
 
 async function renderKeywordTimeline(keyword) {
   const extra = `word=${encodeURIComponent(keyword)}` + (FILTERS.teaser ? "&teaser=true" : "");

@@ -2,6 +2,8 @@
 # 📁 app/main.py
 
 from fastapi import FastAPI
+from fastapi.responses import ORJSONResponse
+from starlette.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -20,7 +22,10 @@ from app.models_sql import ArticleORM  # sicherstellen, dass das Model registrie
 from app.repositories.articles import bulk_upsert_articles
 
 
-app = FastAPI()
+app = FastAPI(default_response_class=ORJSONResponse)
+
+# --- GZip (Antworten ab 1 KB komprimieren) ---
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # --- CORS ---
 app.add_middleware(

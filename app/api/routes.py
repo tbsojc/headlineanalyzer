@@ -307,14 +307,17 @@ def filtered_articles(
 ):
     arts, start, end, mode, bucket = _select_articles(
         db, hours, from_, to,
-        unbounded=False, order="desc", request=request
+        unbounded=True, order="desc", request=request
     )
     articles = arts  # konsistent bleiben
 
     # Quelle
     if source:
         s = source.strip().lower()
-        articles = [a for a in articles if (a.source or "").strip().lower() == s]
+        df = load_media_df()
+        label2norm = dict(zip(df["Medium"].str.strip().str.lower(), df["norm_name"]))
+        valid = {s, label2norm.get(s, s)}   # akzeptiere Label ODER norm_name
+        articles = [a for a in articles if (a.source or "").strip().lower() in valid]
 
     # Keyword (Titel; optional Teaser)
     if keyword:
