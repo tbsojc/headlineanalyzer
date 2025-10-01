@@ -43,6 +43,7 @@ FEEDS = {
     "Watson Deutschland": "https://www.watson.de/rss",
     "Frankfurter Rundschau": "https://www.fr.de/politik/rssfeed.rdf",
     "Bild": "https://www.bild.de/feed/politik.xml",
+    "Bild": "https://www.bild.de/feed/news.xml",
     "Nius": "https://www.nius.de/rss",
     "Deutsche Wirtschaftsnachrichten": "https://deutsche-wirtschafts-nachrichten.de/feed",
     "Manova": "https://www.manova.news/artikel.atom",
@@ -69,6 +70,10 @@ FEEDS = {
     "Compact": "https://www.compact-online.de/feed/",
     "Epoch Times": "https://www.epochtimes.de/rss",
     "Blätter für deutsche und internationale Politik": "https://www.blaetter.de/rss.xml",
+    "apolut": "https://apolut.net/podcast/rss",
+    "t-online": "https://www.t-online.de/nachrichten/feed.rss",
+    "tkp": "https://tkp.at/feed",
+    "Katapult": "https://katapult-magazin.de/feed/rss"
 }
 
 

@@ -7,7 +7,6 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/d3-cloud/build/d3.layout.cloud.min.js"></script>
-  <script src="./date-range-spec.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
   <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
   <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/de.js"></script>
@@ -144,7 +143,10 @@
       <option value="Alexander Wallasch">Alexander Wallasch</option>
       <option value="Compact">Compact</option>
       <option value="Epoch Times">Epoch Times</option>
-      <option value="Blätter für deutsche und internationale Politik">Blätter für deutsche und internationale Politik</option>
+      <option value="apolut">apolut</option>
+      <option value="t-online">t-online</option>
+      <option value="tkp">tkp</option>
+      <option value="Katapult">Katapult</option>
     </select>
   </section>
 
@@ -504,6 +506,8 @@ async function searchByKeyword(kw = null) {
   loadExtremeBubbles();
   renderKeywordTimeline(keyword);
   loadBlindspotFeed();
+  loadWordcloud();
+  updateFilterDisplay();
 
   // --- NEU/robust ---
   const box = document.getElementById("keywordSides");
@@ -703,6 +707,7 @@ async function loadTopAbsoluteKeywords() {
     loadFilteredMediaCompass();
     loadBlindspotFeed();
     updateFilterDisplay();
+    if (FILTERS.keyword) renderKeywordTimeline(FILTERS.keyword); // ← NEU
 
   }
 
@@ -1037,6 +1042,7 @@ async function loadWordcloud() {
       searchByKeyword(d.text);
       loadFilteredMediaCompass(d.text);
       renderKeywordTimeline(d.text);
+      loadWordcloud();
     });
   }
 }
@@ -1337,64 +1343,92 @@ function renderKeywordDensityHeatmapIn(svgId, wrapId, rawData){
     .attr("stroke-width", 0.3);
 }
 
-
+// Säulendiagramm-Version (kopierfähig)
 async function renderKeywordTimeline(keyword) {
-  const extra = `word=${encodeURIComponent(keyword)}` + (FILTERS.teaser ? "&teaser=true" : "");
-  const res = await fetch(withTime("/keywords/timeline", extra));
+  if (!keyword) return;
+
+  const qs = new URLSearchParams({ word: keyword });
+  if (FILTERS.teaser) qs.set("teaser", "true");
+  appendSources(qs);
+
+  const res = await fetch(withTime("/keywords/timeline", qs.toString()));
   if (!res.ok) return;
   const data = await res.json();
 
-  const chartWrap = document.getElementById('timelineChartWrap');   // <div id="timelineChartWrap"><canvas id="timelineChart"></canvas></div>
+  const chartWrap = document.getElementById('timelineChartWrap');
   const canvas    = document.getElementById('timelineChart');
   if (!chartWrap || !canvas) return;
 
-  if (!data || data.length === 0 || data.every(p => (p.count||0) === 0)) {
+  // Empty-State
+  if (!Array.isArray(data) || data.length === 0 || data.every(d => (d.count||0) === 0)) {
     mountChartEmptyOverlay(chartWrap, "Keine Timeline-Daten im gewählten Zeitraum");
-    // Optional: Canvas löschen
     const ctx = canvas.getContext('2d'); ctx.clearRect(0,0,canvas.width,canvas.height);
+    if (window.keywordTimelineChart instanceof Chart) {
+      window.keywordTimelineChart.destroy();
+      window.keywordTimelineChart = null;
+    }
     return;
   } else {
     hideChartEmptyOverlay(chartWrap);
   }
 
-  const bucket = inferBucketFromTimeline(data);
-  const labels = data.map(d => formatTickLabel(d.time, bucket));
+  const labels = data.map(d => {
+    const dt = new Date(d.time); // ISO, Mitternacht UTC
+    return new Intl.DateTimeFormat('de-DE', { weekday:'short', day:'2-digit', month:'2-digit' }).format(dt);
+  });
   const values = data.map(d => d.count);
 
-  // Falls du Chart.js nutzt:
-  if (!window.timelineChart) {
-    const ctx = canvas.getContext('2d');
-    // Annahme: Chart.js ist eingebunden. Wenn nicht, hier durch eigenen Renderer ersetzen.
-    window.timelineChart = new Chart(ctx, {
-      type: 'line',
-      data: { labels, datasets: [{ label: 'Vorkommen', data: values, tension: 0.25, fill: false }] },
+  const ctx = canvas.getContext('2d');
+
+  // Wenn bereits vorhanden, aber als anderer Typ → neu erstellen
+  if (window.keywordTimelineChart instanceof Chart && window.keywordTimelineChart.config.type !== 'bar') {
+    window.keywordTimelineChart.destroy();
+    window.keywordTimelineChart = null;
+  }
+
+  if (!(window.keywordTimelineChart instanceof Chart)) {
+    window.keywordTimelineChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Anzahl Artikel pro Tag',
+          data: values,
+          borderWidth: 1,
+          borderRadius: 6,         // abgerundete Balken
+          maxBarThickness: 42,     // verhindert zu breite Balken
+          categoryPercentage: 0.8,
+          barPercentage: 0.9
+          // Farbe: Chart.js nimmt Standardfarben/Theming; bei Bedarf hier backgroundColor setzen
+        }]
+      },
       options: {
         responsive: true,
+        maintainAspectRatio: false,
         plugins: {
           legend: { display: false },
-          tooltip: {
-            callbacks: {
-              title: (items) => {
-                const idx = items[0].dataIndex;
-                return labels[idx];
-              },
-              label: (item) => `Count: ${item.formattedValue}`
-            }
-          }
+          tooltip: { mode: 'index', intersect: false }
         },
         scales: {
-          x: { ticks: { autoSkip: true, maxTicksLimit: 10 } },
-          y: { beginAtZero: true, ticks: { precision:0 } }
+          x: {
+            ticks: { autoSkip: true, maxTicksLimit: 10 },
+            grid: { display: false }
+          },
+          y: {
+            beginAtZero: true,
+            ticks: { precision: 0 }, // nur ganze Zahlen
+            title: { display: false }
+          }
         }
       }
     });
   } else {
-    window.timelineChart.data.labels = labels;
-    window.timelineChart.data.datasets[0].data = values;
-    window.timelineChart.update();
+    const ch = window.keywordTimelineChart;
+    ch.data.labels = labels;
+    ch.data.datasets[0].data = values;
+    ch.update();
   }
 }
-
 
 
 

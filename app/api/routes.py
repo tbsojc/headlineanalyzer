@@ -579,46 +579,133 @@ def keyword_bias_vector(
 @router.get("/keywords/timeline")
 def keyword_timeline(
     word: str,
-    hours: int = 72,
-    teaser: bool = Query(False),
     from_: str | None = Query(None, alias="from"),
     to: str | None = Query(None),
-    bucket: str = Query("auto", pattern="^(auto|hour|day|week)$"),
-    db: Session = Depends(get_db)
+    teaser: bool = Query(False),
+    source: list[str] | None = Query(None),
+    db: Session = Depends(get_db),
 ):
-    """
-    Zeitreihe der Treffer pro Bucket. bucket=auto|hour|day|week
-    - auto: <=14d → hour, >14d → day
-    """
-    from collections import defaultdict
-    import re
+    try:
+        from datetime import datetime, timedelta, timezone
+        from collections import defaultdict
+        import re, traceback
+        from fastapi import HTTPException
+        from app.core.clean_utils import extract_relevant_words
 
-    articles, start, end, mode, auto_bucket = _select_articles(db, hours, from_, to)
-    if bucket == "auto":
-        bucket = auto_bucket
-    # 'week' ist zusätzlich möglich (UI kann später anbieten)
+        # ---- Datumsparser (ISO mit/ohne TZ, oder YYYY-MM-DD) ----
+        def parse_any_dt(s: str | None):
+            if not s:
+                return None
+            s = s.strip()
+            try:
+                if s.endswith("Z"):
+                    s = s[:-1] + "+00:00"
+                dt = datetime.fromisoformat(s)  # mit/ohne TZ
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                else:
+                    dt = dt.astimezone(timezone.utc)
+                return dt
+            except Exception:
+                pass
+            try:
+                d = datetime.strptime(s[:10], "%Y-%m-%d")
+                return d.replace(tzinfo=timezone.utc)
+            except Exception:
+                raise HTTPException(status_code=400, detail={"where": "parse_dates", "error": f"Invalid date/datetime: {s}"})
 
-    # Terme
-    raw = (word or "").strip().lower()
-    terms = [t.strip() for t in raw.split("+") if t.strip()]
-    if not terms:
-        return []
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        to_dt = parse_any_dt(to) or now
+        from_dt = parse_any_dt(from_) or (to_dt - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
+        if to_dt <= from_dt:
+            to_dt = from_dt + timedelta(days=1)
 
-    patterns = [re.compile(rf"\b{re.escape(t)}\b") for t in terms]
+        # ---- Artikel laden (nutzt euren Helper in DIESER Datei) ----
+        try:
+            # Signatur wie in euren anderen Stellen: hours=None, from_, to, unbounded=True, order="asc"
+            articles, start, end, _mode, _bucket = _select_articles(
+                db,
+                hours=None,
+                from_=from_dt.isoformat(),
+                to=to_dt.isoformat(),  # exklusiv
+                unbounded=True,
+                order="asc",
+            )
+        except Exception as e:
+            tb = traceback.format_exc()
+            print(tb)
+            raise HTTPException(status_code=400, detail={"where": "_select_articles", "error": str(e), "trace": tb})
 
-    # Slots & Gruppierung
-    slots = iter_slots(start, end, bucket)  # inkl. end
-    def slot_key(dt: datetime): return round_to_bucket(dt, bucket)
+        # ---- Optional: Quellen filtern ----
+        if source:
+            wanted = {s.strip().lower() for s in source if s and s.strip()}
+            if wanted:
+                def norm(x): return (x or "").strip().lower()
+                articles = [a for a in articles if norm(getattr(a, "source", None) or getattr(a, "medium", None)) in wanted]
 
-    from collections import defaultdict
-    timeline = defaultdict(int)
-    for a in articles:
-        title_l  = (a.title or "").lower()
-        teaser_l = (a.teaser or "").lower() if (teaser and a.teaser) else ""
-        if all(p.search(title_l) or (teaser and p.search(teaser_l)) for p in patterns):
-            timeline[slot_key(a.published_at)] += 1
+        # ---- Suchterme vorbereiten ('a+b' = UND) ----
+        raw = (word or "").strip().lower()
+        terms = [t for t in (p.strip() for p in raw.split("+")) if t]
+        if not terms:
+            return []
+        patterns = [re.compile(rf"\b{re.escape(t)}\b") for t in terms]
 
-    return [{"time": s.isoformat(), "count": timeline.get(s, 0)} for s in slots]
+        # ---- Zählen pro Tag (Regex ODER Token-Match) ----
+        counts = defaultdict(int)
+
+        for a in articles:
+            d = getattr(a, "published_at", None) or getattr(a, "created_at", None)
+            if not d:
+                continue
+            if isinstance(d, datetime):
+                d = d.astimezone(timezone.utc) if d.tzinfo else d.replace(tzinfo=timezone.utc)
+            else:
+                d = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+
+            if not (from_dt <= d < to_dt):
+                continue
+
+            title_l  = (getattr(a, "title", "") or "").lower()
+            teaser_l = (getattr(a, "teaser", "") or "").lower() if (teaser and getattr(a, "teaser", None)) else ""
+
+            try:
+                toks_title  = set(extract_relevant_words(title_l))
+                toks_teaser = set(extract_relevant_words(teaser_l)) if (teaser and teaser_l) else set()
+            except Exception:
+                toks_title, toks_teaser = set(), set()
+
+            ok = True
+            for i, term in enumerate(terms):
+                if not (
+                    patterns[i].search(title_l)
+                    or (teaser and patterns[i].search(teaser_l))
+                    or (term in toks_title)
+                    or (term in toks_teaser)
+                ):
+                    ok = False
+                    break
+            if ok:
+                counts[d.date()] += 1
+
+        # ---- lückenlose Tagesachse ----
+        first_day = from_dt.date()
+        last_day  = (to_dt - timedelta(microseconds=1)).date()
+        out = []
+        cur = first_day
+        while cur <= last_day:
+            out.append({"time": f"{cur.isoformat()}T00:00:00Z", "count": int(counts.get(cur, 0))})
+            cur += timedelta(days=1)
+
+        return out
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(tb)
+        raise HTTPException(status_code=400, detail={"where": "keyword_timeline", "error": str(e), "trace": tb})
+
 
 
 
