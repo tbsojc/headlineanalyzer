@@ -109,13 +109,33 @@ def get_topics():
 # Medienkompass (CSV)
 # -----------------------------
 @router.get("/media-positions")
-def media_positions():
+def media_positions(request: Request):
+    # Datei-Status für Caching
+    stat = MEDIA_CSV_PATH.stat()
+    mtime = stat.st_mtime  # Unix seconds
+    last_mod_http = datetime.utcfromtimestamp(mtime).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    etag = f'W/"media-csv-{int(mtime)}-{stat.st_size}"'  # schwaches ETag reicht
+
+    # Conditional GET: 304, wenn Client frisch hat
+    inm = request.headers.get("if-none-match")
+    ims = request.headers.get("if-modified-since")
+    if (inm and inm == etag) or (ims and ims == last_mod_http):
+        return Response(status_code=304)
+
+    # Daten bauen (wie bisher)
     df = load_media_df()
     data = [
         {"medium": row["Medium"], "x": row["Systemnähe (X)"], "y": row["Globalismus (Y)"]}
         for _, row in df.iterrows()
     ]
-    return JSONResponse(content=jsonable_encoder(data))
+
+    resp = JSONResponse(content=jsonable_encoder(data))
+    # 24h Cache + Revalidation erlaubt
+    resp.headers["Cache-Control"] = "public, max-age=86400, must-revalidate"
+    resp.headers["ETag"] = etag
+    resp.headers["Last-Modified"] = last_mod_http
+    return resp
+
 
 
 @router.get("/media-positions/by-keyword")
@@ -324,12 +344,18 @@ def filtered_articles(
     # Keyword (wie gehabt) …
     if keyword:
         import re
-        pat = re.compile(rf"\b{re.escape(keyword.strip().lower())}\b")
-        def match(a):
-            title = (a.title or "").lower()
-            te = (a.teaser or "").lower() if teaser and a.teaser else ""
-            return bool(pat.search(title) or (te and pat.search(te)))
-        articles = [a for a in articles if match(a)]
+        terms = [t.strip().lower() for t in keyword.split('+') if t.strip()]
+        if terms:
+            patterns = [re.compile(rf"\b{re.escape(t)}\b") for t in terms]
+
+            def match(a):
+                title = (a.title or "").lower()
+                te = (a.teaser or "").lower() if (teaser and a.teaser) else ""
+                txt = title + (" " + te if te else "")
+                # Alle Terme müssen vorkommen (Titel ODER optional Teaser)
+                return all(p.search(txt) for p in patterns)
+
+            articles = [a for a in articles if match(a)]
     elif teaser:
         articles = [a for a in articles if a.teaser]
 
@@ -714,21 +740,26 @@ def keywords_top_absolute(
     hours: int = Query(72),
     ngram: int = Query(1, ge=1, le=3),
     teaser: bool = Query(False),
-    compare_prev: bool = Query(False),                 # NEU
+    compare_prev: bool = Query(False),
     from_: str | None = Query(None, alias="from"),
     to: str | None = Query(None),
+    source: list[str] | None = Query(None),   # <-- neu: Quellen aus Query übernehmen
     db: Session = Depends(get_db),
-    request: Request = None
+    request: Request = None,                  # <-- kein Union-Typ!
 ):
     from collections import Counter
     from itertools import combinations
     from app.core.clean_utils import extract_relevant_words
 
+    # Aktuelles Fenster laden (ohne source-Arg) und ggf. filtern
     articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
+    if source:
+        source_set = set(source)
+        articles = [a for a in articles if getattr(a, "source", None) in source_set]
 
     def units_from_article(a):
         tokens = set(extract_relevant_words(a.title))
-        if teaser and a.teaser:
+        if teaser and getattr(a, "teaser", None):
             tokens |= set(extract_relevant_words(a.teaser))
         toks = sorted(tokens)
         if ngram == 1:
@@ -742,19 +773,22 @@ def keywords_top_absolute(
     for a in articles:
         now_words.update(units_from_article(a))
 
-    # Vorperiode (optional) – gleiche Länge direkt vor [start, end)
+    # Vorperiode (optional): gleiche Länge direkt vor [start, end)
     if compare_prev:
         p_start, p_end = previous_window(start, end)
-        prev = get_articles_between(db, p_start, p_end)
+        prev = get_articles_between(db, p_start, p_end)  # kein source-Arg
+        if source:
+            source_set = set(source)
+            prev = [a for a in prev if getattr(a, "source", None) in source_set]
         for a in prev:
             past_words.update(units_from_article(a))
 
-    # Ausgabe
+    # Ausgabe (Top 30)
     result = []
     for term, current_count in now_words.most_common(30):
         prev_count = past_words.get(term, 0)
         delta = current_count - prev_count
-        change_pct = (delta / prev_count * 100) if prev_count > 0 else 0.0
+        change_pct = (delta / prev_count * 100.0) if prev_count > 0 else 0.0
         result.append({
             "word": term,
             "current": current_count,
@@ -954,6 +988,7 @@ def blindspot_keywords_feed(
     top_n: int = Query(25),
     teaser: bool = Query(False),
     ngram: int = Query(1, ge=1, le=3),
+    min_sources: int = Query(2),
     from_: str | None = Query(None, alias="from"),   # NEU
     to: str | None = Query(None),                     # NEU
     db: Session = Depends(get_db),
@@ -1029,6 +1064,10 @@ def blindspot_keywords_feed(
         x_counts, y_counts = counts_for(coords)
         total = x_counts["total"] or 1
 
+        # Quellen-Anzahl prüfen (NEU)
+        if len(sources_by_word[w]) < min_sources:
+            continue
+
         p_krit = x_counts["kritisch"] / total
         p_nah  = x_counts["nah"]      / total
         p_nat  = y_counts["national"] / total
@@ -1053,6 +1092,7 @@ def blindspot_keywords_feed(
             }
         }
 
+
         if p_krit <= ratio_max: L_kritisch.append(item)
         if p_nah  <= ratio_max: L_nah.append(item)
         if p_nat  <= ratio_max: L_national.append(item)
@@ -1073,4 +1113,242 @@ def blindspot_keywords_feed(
             "globalistisch":   sort_list(L_global,   "global"),
         }
     }
+
+@router.get("/chronicle/weekly-top3")
+def chronicle_weekly_top3(
+    weeks: int = Query(12, ge=1, le=104),                # Anzahl zurückzugebender Wochen (rückwärts)
+    teaser: bool = Query(False),                         # Teaser berücksichtigen?
+    source: list[str] | None = Query(None),              # Mehrfachquellen (?source=…)
+    ngram: int = Query(1, ge=1, le=3),                   # 1er/2er/3er-Kombis (optional)
+    from_: str | None = Query(None, alias="from"),       # optionales Zeitfenster
+    to: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Liefert für jede ISO-Kalenderwoche im gewählten Zeitraum die Top-3 Keywords.
+    Falls kein from/to übergeben wird, wird aus dem aktuellen Fenster (/_select_articles)
+    der effektive Zeitraum genommen und dann maximal `weeks` Wochen rückwärts ausgegeben.
+    """
+    from collections import Counter, defaultdict
+    from itertools import combinations
+    from datetime import datetime, timedelta, timezone
+    import math
+    import re
+    from app.core.clean_utils import extract_relevant_words
+
+    # Artikel + Zeitraum bestimmen (nutzt eure zentrale Hilfsfunktion)
+    arts, start, end, _mode, _bucket = _select_articles(
+        db, hours=None, from_=from_, to=to, unbounded=True, order="asc"
+    )
+
+    # Quellenfilter
+    if source:
+        wanted = { (s or "").strip().lower() for s in source if s and s.strip() }
+        if wanted:
+            arts = [a for a in arts if (a.source or "").strip().lower() in wanted]
+
+    # Ngram-Extractor je Artikel
+    def units_from_article(a):
+        tokens = set(extract_relevant_words(a.title or ""))
+        if teaser and getattr(a, "teaser", None):
+            tokens |= set(extract_relevant_words(a.teaser or ""))
+        toks = sorted(tokens)
+        if ngram == 1:
+            return set(toks)
+        return {" + ".join(c) for c in combinations(toks, ngram)}
+
+    # Gruppierung nach ISO-Jahr/ISO-Woche
+    # Wir mappen Woche -> Counter und merken uns das reale Wochenintervall (Mo..So)
+    week_counts: dict[tuple[int,int], Counter] = defaultdict(Counter)
+    week_bounds: dict[tuple[int,int], tuple[datetime, datetime]] = {}
+
+    def iso_week_bounds(d_utc: datetime):
+        # ISO: Woche beginnt am Montag
+        # Normalisiere auf 00:00 UTC
+        d0 = d_utc.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        wd = (d0.isoweekday() % 7)  # Mo=1..So=7 -> 0..6 (So=0)
+        monday = d0 - timedelta(days=(wd-1 if wd != 0 else 6))
+        if wd == 0:  # Sonntag
+            monday = d0 - timedelta(days=6)
+        sunday_end_exclusive = monday + timedelta(days=7)
+        return monday, sunday_end_exclusive
+
+    for a in arts:
+        dt = getattr(a, "published_at", None)
+        if not isinstance(dt, datetime):
+            continue
+        dt = dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+        iso_year, iso_week, _ = dt.isocalendar()
+        key = (iso_year, iso_week)
+
+        # Einmalig Bounds berechnen/merken
+        if key not in week_bounds:
+            w_start, w_end_ex = iso_week_bounds(dt)
+            week_bounds[key] = (w_start, w_end_ex)
+
+        # Einheiten zählen
+        units = units_from_article(a)
+        week_counts[key].update(units)
+
+    if not week_counts:
+        return []
+
+    # Wochen sortieren (neueste zuerst), auf gewünschte Anzahl begrenzen
+    keys_sorted = sorted(week_counts.keys(), key=lambda k: (k[0], k[1]), reverse=True)
+    if weeks:
+        keys_sorted = keys_sorted[:weeks]
+
+    # Ausgabeformat
+    out = []
+    for key in keys_sorted:
+        iso_year, iso_week = key
+        w_start, w_end_ex = week_bounds[key]  # [Mo 00:00, Mo(+7) 00:00)
+        # „Sonntag“ = letzter inklusiver Tag ist w_end_ex - 1 Sekunde
+        end_inclusive = (w_end_ex - timedelta(seconds=1))
+
+        top3 = [
+            {"word": term, "count": int(cnt)}
+            for term, cnt in week_counts[key].most_common(3)
+        ]
+
+        out.append({
+            "iso_year": iso_year,
+            "iso_week": iso_week,
+            "week_label": f"KW {iso_week}",
+            "start_date": w_start.date().isoformat(),
+            "end_date": end_inclusive.date().isoformat(),
+            "top": top3,
+            "ngram": ngram,
+        })
+
+    return out
+
+@router.get("/chronicle/weekly-top3-all")
+def chronicle_weekly_top3_all(
+    weeks: int = Query(10, ge=1, le=104),               # wie gefordert: default letzte 10 Wochen
+    teaser: bool = Query(False),                         # Teaser berücksichtigen?
+    source: list[str] | None = Query(None),              # Mehrfachquellen (?source=…)
+    from_: str | None = Query(None, alias="from"),       # optionales Zeitfenster
+    to: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Liefert für jede ISO-Kalenderwoche die Top-3 für:
+      - ngram = 1 (Einzel-Keywords)
+      - ngram = 2 (2er-Kombis)
+      - ngram = 3 (3er-Kombis)
+    in EINER Antwort, um Mehrfach-Requests zu vermeiden.
+
+    Antwortform pro Woche:
+    {
+      "iso_year": 2025,
+      "iso_week": 39,
+      "week_label": "KW 39",
+      "start_date": "2025-09-22",
+      "end_date":   "2025-09-28",
+      "top1": [{"word":"...", "count":N}, … bis 3],
+      "top2": [{"word":"a + b", "count":N}, … bis 3],
+      "top3": [{"word":"a + b + c", "count":N}, … bis 3]
+    }
+    """
+    from collections import defaultdict, Counter
+    from itertools import combinations
+    from datetime import datetime, timedelta, timezone
+    from app.core.clean_utils import extract_relevant_words
+
+    # 1) Artikel & Zeitraum über zentrale Helper holen (ASC für stabile Wochen-Gruppierung)
+    arts, start, end, _mode, _bucket = _select_articles(
+        db, hours=None, from_=from_, to=to, unbounded=True, order="asc"
+    )
+
+    # 2) Quellenfilter (Mehrfach)
+    if source:
+        wanted = { (s or "").strip().lower() for s in source if s and s.strip() }
+        if wanted:
+            def norm(x): return (x or "").strip().lower()
+            arts = [a for a in arts if norm(getattr(a, "source", None)) in wanted]
+
+    # 3) Pro ISO-Woche 3 Counter pflegen (ngram=1/2/3) + Bounds (Montag..Sonntag)
+    week_counts_1: dict[tuple[int,int], Counter] = defaultdict(Counter)
+    week_counts_2: dict[tuple[int,int], Counter] = defaultdict(Counter)
+    week_counts_3: dict[tuple[int,int], Counter] = defaultdict(Counter)
+    week_bounds: dict[tuple[int,int], tuple[datetime, datetime]] = {}
+
+    def iso_week_bounds(d_utc: datetime):
+        # Normalisiere auf 00:00 UTC und ermittle Montag 00:00 bis Montag(+7) 00:00 (exklusiv)
+        d0 = d_utc.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        wd = (d0.isoweekday() % 7)  # Mo=1..So=7 -> 0..6 (So=0)
+        monday = d0 - timedelta(days=(wd-1 if wd != 0 else 6))
+        if wd == 0:  # Sonntag
+            monday = d0 - timedelta(days=6)
+        end_ex = monday + timedelta(days=7)
+        return monday, end_ex
+
+    for a in arts:
+        dt = getattr(a, "published_at", None)
+        if not isinstance(dt, datetime):
+            continue
+        dt = dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+        iso_year, iso_week, _ = dt.isocalendar()
+        key = (iso_year, iso_week)
+
+        # Bounds einmalig ermitteln
+        if key not in week_bounds:
+            w_start, w_end_ex = iso_week_bounds(dt)
+            week_bounds[key] = (w_start, w_end_ex)
+
+        # Tokens (einmal extrahieren → für n=1/2/3 wiederverwenden)
+        tokens = set(extract_relevant_words(a.title or ""))
+        if teaser and getattr(a, "teaser", None):
+            tokens |= set(extract_relevant_words(a.teaser or ""))
+        if not tokens:
+            continue
+        toks_sorted = sorted(tokens)
+
+        # n=1
+        week_counts_1[key].update(tokens)
+        # n=2
+        if len(toks_sorted) >= 2:
+            combos2 = set(" + ".join(c) for c in combinations(toks_sorted, 2))
+            if combos2:
+                week_counts_2[key].update(combos2)
+        # n=3
+        if len(toks_sorted) >= 3:
+            combos3 = set(" + ".join(c) for c in combinations(toks_sorted, 3))
+            if combos3:
+                week_counts_3[key].update(combos3)
+
+    if not week_bounds:
+        return []
+
+    # 4) Wochen nach Start absteigend sortieren und auf 'weeks' begrenzen
+    weeks_sorted = sorted(week_bounds.keys(), key=lambda k: week_bounds[k][0], reverse=True)[:weeks]
+
+    # 5) Ausgabe
+    out = []
+    for key in weeks_sorted:
+        iso_year, iso_week = key
+        w_start, w_end_ex = week_bounds[key]
+        end_inclusive = (w_end_ex - timedelta(seconds=1))
+
+        def top3(counter: Counter):
+            return [
+                {"word": term, "count": int(cnt)}
+                for term, cnt in counter.most_common(3)
+            ]
+
+        out.append({
+            "iso_year": iso_year,
+            "iso_week": iso_week,
+            "week_label": f"KW {iso_week}",
+            "start_date": w_start.date().isoformat(),
+            "end_date": end_inclusive.date().isoformat(),
+            "top1": top3(week_counts_1.get(key, Counter())),
+            "top2": top3(week_counts_2.get(key, Counter())),
+            "top3": top3(week_counts_3.get(key, Counter())),
+        })
+
+    return out
 

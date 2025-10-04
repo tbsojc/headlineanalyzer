@@ -4,12 +4,12 @@
   <meta charset="UTF-8">
   <title>News Trends & Visuals</title>
   <link rel="stylesheet" href="./style.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://d3js.org/d3.v7.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/d3-cloud/build/d3.layout.cloud.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+  <script src="https://d3js.org/d3.v7.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3-cloud/build/d3.layout.cloud.min.js" defer></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-  <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/de.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/de.js" defer></script>
 </head>
 <body>
 
@@ -67,8 +67,10 @@
     </div>
   </section>
 
+
+
   <section class="drawer-section">
-    <h4>Medien-Bias</h4>
+    <h4>Quelle</h4>
     <div id="biasFilters" class="btn-row">
       <button type="button" data-bias="systemkritisch">Systemkritisch</button>
       <button type="button" data-bias="systemnah">Systemnah</button>
@@ -76,11 +78,6 @@
       <button type="button" data-bias="nationalistisch">Nationalistisch</button>
       <button type="button" id="biasClearBtn">Alle</button>
     </div>
-  </section>
-
-
-  <section class="drawer-section">
-    <h4>Quelle</h4>
     <div class="multiselect" id="sourceMultiSelect">
       <button type="button" id="sourceMultiBtn">Alle Quellen</button>
       <div class="multiselect-panel" id="sourcePanel" hidden>
@@ -177,6 +174,25 @@
 
 <section id="blindspotFeed" class="blindspot-feed">
   <h2>🕳️ Blindspot-Feed (Keyword-basiert)</h2>
+  <!-- Blindspot-Controls -->
+  <div id="blindspotControls" class="blindspot-controls" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin:10px 0 18px 0">
+    <label style="display:flex;align-items:center;gap:8px">
+      Mindest-Quellen:
+      <input id="bsMinSources" type="range" min="1" max="50" step="1" value="2" />
+      <span id="bsMinSourcesVal">2</span>
+    </label>
+    <label style="display:flex;align-items:center;gap:8px">
+      Mindest-Erwähnungen:
+      <input id="bsMinTotal" type="range" min="1" max="50" step="1" value="10" />
+      <span id="bsMinTotalVal">10</span>
+    </label>
+    <label style="display:flex;align-items:center;gap:8px">
+      Blindspot-Wert (≤ %):
+      <input id="bsRatio" type="range" min="1" max="100" step="1" value="5" />
+      <span id="bsRatioVal">5%</span>
+    </label>
+  </div>
+  <div id="blindspotInfo" style="margin-top:8px;font-size:0.9em;color:#444"></div>
   <div class="blindspot-grid">
     <div class="blindspot-col" id="feedKritisch">
       <h3>Kaum systemkritisch</h3>
@@ -203,6 +219,12 @@
   <div class="trend-grid" id="trendGrid"></div>
 </section>
 
+<section id="weeklyChronicle" class="chart-box">
+  <h2>🗓️ Chronik: Top-Keywords je Kalenderwoche</h2>
+  <div id="weeklyChronicleBody">
+    <div class="empty-state">Wird geladen…</div>
+  </div>
+</section>
 
 
   <div class="chart-row">
@@ -301,10 +323,12 @@
 
 
     let activeBiasFilter = null;
+    let MEDIA_POS_CACHE = null;
     let keywordScatterChart = null;
     let keywordTimelineChart = null;
     let mediaCompassChart = null;
     let selectedKeyword = "";
+    let _lastCompassKey = '';
 
     // Zentrale Filter – eine Quelle der Wahrheit
     const FILTERS = {
@@ -318,6 +342,11 @@
 
     const ACTIVE_SOURCES = new Set();        // ← neue Mehrfachauswahl
     const activeBiasFilters = new Set();     // ← ersetzt Single-Bias
+    const BLINDSPOT_UI = {
+      min_sources: 2,   // NEU: Mindestzahl an Quellen
+      min_total: 10,    // Mindest-Erwähnungen
+      ratio_max: 0.05   // 5%  (als Dezimalzahl)
+    };
 
     // Kompatibilität: alter Code darf noch "filters" benutzen
     Object.defineProperty(window, 'filters', {
@@ -333,6 +362,19 @@
         }
       }
     });
+
+    // === Lazy-Mount Helper (einmalig) ===
+    function lazyMount(id, loaderFn, rootMargin = '200px') {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const io = new IntersectionObserver((entries) => {
+        if (entries.some(e => e.isIntersecting)) {
+          try { loaderFn(); } finally { io.disconnect(); }
+        }
+      }, { rootMargin });
+      io.observe(el);
+    }
+
 
     window.addEventListener('load', () => {
       // URL -> State
@@ -351,12 +393,21 @@
 
       // Initiale Datenladungen
       loadWordcloud();
-      loadMediaCompass();
-      loadFilteredArticles();
-      loadKeywordTrends();
-      loadExtremeBubbles();
       loadTopAbsoluteKeywords();
-      loadBlindspotFeed();
+
+      // Rest, sobald der Browser Leerlauf hat (Fallback auf setTimeout)
+      const idle = window.requestIdleCallback || (fn => setTimeout(fn, 150));
+      idle(() => {
+        // Sofort im Idle (leicht / wichtig)
+        loadMediaCompass();
+        loadFilteredArticles();
+        loadBlindspotFeed();
+
+        // Schwere Blöcke erst, wenn im Viewport
+        lazyMount('keywordTrends',     loadKeywordTrends);     // <section id="keywordTrends">
+        lazyMount('extremeBubbles',    loadExtremeBubbles);    // <section id="extremeBubbles">
+        lazyMount('weeklyChronicle',   loadWeeklyChronicle);   // <section id="weeklyChronicle">
+      });
     });
 
 function initSourcePanelFromSelect() {
@@ -449,10 +500,11 @@ window.addEventListener('load', () => {
       FILTERS.from = toLocalIsoWithTZ(defFrom);
       FILTERS.to   = toLocalIsoWithTZ(endEx);
       // Mehrere ?source=… auslesen
-      const p = new URLSearchParams(location.search);
-      const sources = p.getAll('source');    // ← alle Vorkommen
+      const p2 = new URLSearchParams(location.search);
+      const sources = p2.getAll('source');
       ACTIVE_SOURCES.clear();
       for (const s of sources) if (s && s.trim()) ACTIVE_SOURCES.add(s.trim());
+      FILTERS.source = sources.length ? sources[0] : null; // Mirror für Altcode
 
       // Abwärtskompatibilität: ersten Eintrag auch in FILTERS.source spiegeln
       FILTERS.source = sources.length ? sources[0] : null;
@@ -647,14 +699,24 @@ async function loadTopAbsoluteKeywords() {
     compare_prev: "1"
   });
   if (FILTERS.teaser) qs.set("teaser", "true");
-  const res = await fetch(withTime("/keywords/top-absolute", qs.toString()));
-  const data = await res.json();
+
+  // Quellen hinzufügen (Mehrfachauswahl)
+  appendSources(qs);
+
+  // Zeit via Helper + Cache zuverlässig ausschalten
+  const url = withTime("/keywords/top-absolute", qs.toString());
+  const res = await fetch(url, { cache: "no-store" });   // <- FIX
+  if (!res.ok) {
+    document.querySelector("#keywordTopAbsoluteColumns").innerHTML =
+      `<div class="empty-state">Fehler beim Laden (${res.status})</div>`;
+    return;
+  }
+  const data = await res.json(); // Backend liefert Array mit {word,current,previous,delta,change_pct}
 
   const container = document.querySelector("#keywordTopAbsoluteColumns");
   container.innerHTML = "";
 
-  // 3 Spalten à 10
-  const chunkSize = 10;
+  const chunkSize = 10; // 3 Spalten à 10
   for (let i = 0; i < 3; i++) {
     const chunk = data.slice(i * chunkSize, (i + 1) * chunkSize);
 
@@ -676,14 +738,29 @@ async function loadTopAbsoluteKeywords() {
     const tbody = table.querySelector("tbody");
 
     chunk.forEach(row => {
-      const pctChange = row.change_pct;
-      const trendClass = pctChange >= 0 ? "trend-up" : "trend-down";
+      const curr = Number(row.current ?? 0);
+      const prev = Number(row.previous ?? 0);
+      const delta = Number.isFinite(row.delta) ? row.delta : (curr - prev);
+
+      // Anzeige-Logik für Prozent:
+      // - Wenn prev==0 und curr>0 -> "neu"
+      // - sonst gerundet ausgeben (zur Not aus row.change_pct)
+      let pctDisplay;
+      if (prev === 0 && curr > 0) {
+        pctDisplay = "neu";
+      } else {
+        const pct = Number.isFinite(row.change_pct) ? row.change_pct : (delta / (prev || 1) * 100);
+        pctDisplay = `${pct >= 0 ? "+" : ""}${Math.round(pct)}%`;
+      }
+
+      const trendClass = delta >= 0 ? "trend-up" : "trend-down";
+
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>${row.word}</td>
-        <td>${row.current}</td>
-        <td class="${trendClass}">${row.delta >= 0 ? "+" : ""}${row.delta}</td>
-        <td class="${trendClass}">${pctChange >= 0 ? "+" : ""}${pctChange}%</td>
+        <td>${curr}</td>
+        <td class="${trendClass}">${delta >= 0 ? "+" : ""}${delta}</td>
+        <td class="${trendClass}">${pctDisplay}</td>
       `;
       tr.style.cursor = "pointer";
       tr.onclick = () => searchByKeyword(row.word);
@@ -706,10 +783,104 @@ async function loadTopAbsoluteKeywords() {
     loadWordcloud();
     loadFilteredMediaCompass();
     loadBlindspotFeed();
+    loadWeeklyChronicle();
     updateFilterDisplay();
     if (FILTERS.keyword) renderKeywordTimeline(FILTERS.keyword); // ← NEU
 
   }
+
+async function getMediaPositions() {
+  if (MEDIA_POS_CACHE) return MEDIA_POS_CACHE;
+  const res = await fetch('/media-positions', { cache: 'no-store' });
+  if (!res.ok) {
+    console.error('media-positions failed', res.status);
+    return [];
+  }
+  const data = await res.json(); // [{medium, x, y}]
+  MEDIA_POS_CACHE = Array.isArray(data) ? data : [];
+  return MEDIA_POS_CACHE;
+}
+
+// 2) Quellen anhand eines Bias-Schalters bestimmen
+async function pickSourcesForBias(biasName) {
+  const THRESH = 0.01;                // Bereichs-Schwelle
+  const data = await getMediaPositions(); // [{ medium, x, y }]
+
+  const hits = [];
+  for (const d of data) {
+    const x = Number(d.x);
+    const y = Number(d.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+
+    if (biasName === 'systemkritisch'   && x <= -THRESH) hits.push(d.medium);
+    if (biasName === 'systemnah'        && x >=  THRESH) hits.push(d.medium);
+    if (biasName === 'globalistisch'    && y >=  THRESH) hits.push(d.medium);
+    if (biasName === 'nationalistisch'  && y <= -THRESH) hits.push(d.medium);
+  }
+  return hits;
+}
+
+
+// 3) UI-Checkboxen im Quellen-Panel an ACTIVE_SOURCES anpassen
+function syncSourcePanelChecks() {
+  const panel = document.getElementById('sourcePanel');
+  if (!panel) return;
+  Array.from(panel.querySelectorAll('.source-box')).forEach(cb => {
+    cb.checked = ACTIVE_SOURCES.has(cb.value);
+  });
+  updateSourceBtnLabel();
+}
+
+// 4) Bias setzen: Quellen aus CSV selektieren und Filter anwenden
+async function setBiasAndSelectSources(biasName) {
+  // "Alle" -> alles zurücksetzen
+  if (!biasName || biasName === 'alle') {
+    activeBiasFilters.clear();
+    ACTIVE_SOURCES.clear();
+    syncSourcePanelChecks();
+    updateURLFromFilters(false);
+    applyFilters();
+    return;
+  }
+
+  // activeBiasFilters als Single-Choice (wenn du Multi willst, kannst du das ändern)
+  activeBiasFilters.clear();
+  activeBiasFilters.add(biasName);
+
+  // Quellen laut CSV auswählen
+  const picked = await pickSourcesForBias(biasName);
+
+  ACTIVE_SOURCES.clear();
+  for (const s of picked) ACTIVE_SOURCES.add(s);
+
+  // Für Alt-Code: ersten Eintrag spiegeln
+  FILTERS.source = ACTIVE_SOURCES.size ? Array.from(ACTIVE_SOURCES)[0] : null;
+
+  // Buttons optisch markieren
+  document.querySelectorAll('#biasFilters button[data-bias]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.bias === biasName);
+  });
+
+  syncSourcePanelChecks();
+  updateURLFromFilters(false);
+  applyFilters();
+}
+
+// 5) Click-Binding für deine Bias-Buttons (und „Alle“)
+document.getElementById('biasFilters').addEventListener('click', (e) => {
+  const btnBias = e.target.closest('button[data-bias]');
+  if (btnBias) {
+    e.preventDefault();
+    setBiasAndSelectSources(btnBias.dataset.bias);
+    return;
+  }
+  if (e.target.id === 'biasClearBtn') {
+    e.preventDefault();
+    setBiasAndSelectSources('alle');
+  }
+});
+
+
 
 // Setter für den Bias-Filter: setzt/toggelt den Filter und triggert die Aktualisierung
 function setBiasFilter(filterName) {
@@ -970,9 +1141,10 @@ async function loadWordcloud() {
   const data = await res.json();
 
   const words = data
-    .filter(([_, count]) => count >= 2)
+    .filter(([_, count]) => count >= 3)
     .map(([text, count]) => ({ text, count }))
     .sort((a, b) => b.count - a.count); // sortiere nach Häufigkeit absteigend
+
 
   d3.select("#wordcloud").html(""); // alte SVG löschen
 
@@ -1431,11 +1603,81 @@ async function renderKeywordTimeline(keyword) {
 }
 
 
+async function loadWeeklyChronicle() {
+  const weeks = 10; // wie gewünscht: immer die letzten 10 Wochen (außer bei manuellem Zeitraum)
+  const body = document.getElementById("weeklyChronicleBody");
+  body.innerHTML = `<div class="empty-state">Wird geladen…</div>`;
+
+  const qs = new URLSearchParams({ weeks: String(weeks) });
+  appendSources(qs);
+  if (FILTERS.teaser) qs.set("teaser", "true");
+
+  try {
+    const res = await fetch(withTime("/chronicle/weekly-top3-all", qs.toString()), { cache: "no-store" });
+    if (!res.ok) {
+      body.innerHTML = `<div class="empty-state">Fehler beim Laden (${res.status}).</div>`;
+      return;
+    }
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) {
+      body.innerHTML = `<div class="empty-state">Keine Daten im gewählten Zeitraum.</div>`;
+      return;
+    }
+
+    body.innerHTML = data.map(w => `
+      <details class="chronicle-accordion">
+        <summary><strong>${w.week_label}</strong> (${w.start_date} – ${w.end_date})</summary>
+        <div class="chronicle-combos" style="display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));margin-top:10px">
+          <div class="chronicle-combo">
+            <h4 style="margin:.2rem 0 .4rem 0">Top 3 (Einzel)</h4>
+            <div>
+              ${(w.top1||[]).map((t,i)=>`
+                <button class="linklike" data-kw="${t.word}">#${i+1} ${t.word} (${t.count})</button>
+              `).join(" · ") || "—"}
+            </div>
+          </div>
+          <div class="chronicle-combo">
+            <h4 style="margin:.2rem 0 .4rem 0">Top 3 (2er-Kombis)</h4>
+            <div>
+              ${(w.top2||[]).map((t,i)=>`
+                <button class="linklike" data-kw="${t.word}">#${i+1} ${t.word} (${t.count})</button>
+              `).join(" · ") || "—"}
+            </div>
+          </div>
+          <div class="chronicle-combo">
+            <h4 style="margin:.2rem 0 .4rem 0">Top 3 (3er-Kombis)</h4>
+            <div>
+              ${(w.top3||[]).map((t,i)=>`
+                <button class="linklike" data-kw="${t.word}">#${i+1} ${t.word} (${t.count})</button>
+              `).join(" · ") || "—"}
+            </div>
+          </div>
+        </div>
+      </details>
+    `).join("");
+
+    // Keyword-Klicks → Suche/Drilldown
+    body.querySelectorAll('button[data-kw]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const kw = btn.getAttribute('data-kw');
+        searchByKeyword(kw);
+      });
+    });
+
+  } catch (err) {
+    console.error(err);
+    body.innerHTML = `<div class="empty-state">Unbekannter Fehler beim Laden.</div>`;
+  }
+}
+
+
+
 
 async function loadBlindspotFeed() {
   const qs = new URLSearchParams({
-    min_total: "5",
-    ratio_max: "0.20",
+    min_sources: String(BLINDSPOT_UI.min_sources),           // NEU
+    min_total: String(BLINDSPOT_UI.min_total),               // jetzt dynamisch
+    ratio_max: String(BLINDSPOT_UI.ratio_max),               // Dezimal (z.B. 0.05)
     ngram: String(FILTERS.ngram ?? 1)
   });
   if (FILTERS.teaser) qs.set("teaser", "true");
@@ -1497,22 +1739,68 @@ function renderBlindspotFeed(data) {
   }
 }
 
+function initBlindspotControls(){
+  const elMinSources = document.getElementById('bsMinSources');
+  const elMinSourcesVal = document.getElementById('bsMinSourcesVal');
+  const elMinTotal = document.getElementById('bsMinTotal');
+  const elMinTotalVal = document.getElementById('bsMinTotalVal');
+  const elRatio = document.getElementById('bsRatio');
+  const elRatioVal = document.getElementById('bsRatioVal');
+
+  // Initial anzeigen
+  elMinSourcesVal.textContent = String(BLINDSPOT_UI.min_sources);
+  elMinTotalVal.textContent = String(BLINDSPOT_UI.min_total);
+  elRatioVal.textContent = `${Math.round(BLINDSPOT_UI.ratio_max*100)}%`;
+  updateBlindspotInfo();
+
+  // Events
+  elMinSources.addEventListener('input', () => {
+    BLINDSPOT_UI.min_sources = parseInt(elMinSources.value, 10);
+    elMinSourcesVal.textContent = String(BLINDSPOT_UI.min_sources);
+    updateBlindspotInfo();
+  });
+  elMinTotal.addEventListener('input', () => {
+    BLINDSPOT_UI.min_total = parseInt(elMinTotal.value, 10);
+    elMinTotalVal.textContent = String(BLINDSPOT_UI.min_total);
+    updateBlindspotInfo();
+  });
+  elRatio.addEventListener('input', () => {
+    const pct = parseInt(elRatio.value, 10);
+    BLINDSPOT_UI.ratio_max = pct / 100;
+    elRatioVal.textContent = `${pct}%`;
+    updateBlindspotInfo();
+  });
+
+  // Beim Loslassen neu laden (nicht bei jedem Pixel)
+  ['change','mouseup','touchend'].forEach(evt => {
+    elMinSources.addEventListener(evt, loadBlindspotFeed);
+    elMinTotal.addEventListener(evt, loadBlindspotFeed);
+    elRatio.addEventListener(evt, loadBlindspotFeed);
+  });
+}
+
+window.addEventListener('load', initBlindspotControls);
+
+function updateBlindspotInfo() {
+  const info = document.getElementById('blindspotInfo');
+  if (!info) return;
+  const txt = `Keywords mit mindestens ${BLINDSPOT_UI.min_sources} Quellen, ${BLINDSPOT_UI.min_total} Erwähnungen und ≤ ${Math.round(BLINDSPOT_UI.ratio_max*100)} % Berichterstattung auf der jeweiligen Achse.`;
+  info.textContent = txt;
+}
 
 
-
-
-    async function loadFilteredMediaCompass() {
-      const qs = new URLSearchParams();
-      appendSources(qs);
-      if (FILTERS.keyword) qs.set("keyword", FILTERS.keyword);
-      if (FILTERS.teaser)  qs.set("teaser", "true");
-      const res = await fetch(withTime("/media-positions/filtered", qs.toString()));
-      const data = await res.json();
-      drawMediaCompass(data, "Gefilterte Medien");
-    }
-
-
-
+  async function loadFilteredMediaCompass() {
+    const qs = new URLSearchParams();
+    appendSources(qs);
+    if (FILTERS.keyword) qs.set("keyword", FILTERS.keyword);
+    if (FILTERS.teaser)  qs.set("teaser", "true");
+    const key = qs.toString();
+    if (key === _lastCompassKey) return;  // nichts Neues → keine Arbeit
+    _lastCompassKey = key;
+    const res = await fetch(withTime("/media-positions/filtered", key));
+    const data = await res.json();
+    drawMediaCompass(data, "Gefilterte Medien");
+  }
 
 
 

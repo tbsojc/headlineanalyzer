@@ -564,3 +564,124 @@ input[type="text"]:focus, select:focus { border-color: #3b82f6; }
 .multiselect-panel { position: absolute; z-index: 10; background: #fff; border: 1px solid #ccc; padding: .5rem; max-height: 260px; overflow: auto; min-width: 240px; }
 .multiselect-panel label { display: block; margin: .25rem 0; cursor: pointer; }
 .multiselect-panel input { margin-right: .5rem; }
+
+
+/* ===== Chronik: Top-Keywords je Kalenderwoche ===== */
+
+/* Rahmen der Sektion (harmoniert mit "chart-box", falls vorhanden) */
+#weeklyChronicle {
+  margin-block: 1.5rem;
+}
+
+/* Container: responsive Grid, auto-fit Karten */
+#weeklyChronicleBody {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+/* Karten-Stil pro Woche */
+#weeklyChronicleBody .chronicle-row {
+  border: 1px solid var(--gh-border, #e6e6e6);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--gh-surface, #fff);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.02);
+  transition: transform .08s ease-out, box-shadow .12s ease-out, border-color .12s ease-out;
+}
+
+#weeklyChronicleBody .chronicle-row:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.06);
+  border-color: var(--gh-border-strong, #dcdcdc);
+}
+
+/* Kopfzeile in der Karte: KW + Datumsbereich */
+#weeklyChronicleBody .chronicle-row > div:first-child {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+  letter-spacing: .2px;
+}
+
+/* Zeile mit den Top-Keywords */
+#weeklyChronicleBody .chronicle-row > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  line-height: 1.8;
+}
+
+/* Keyword-“Chips” als unaufdringliche Buttons */
+#weeklyChronicleBody .linklike {
+  appearance: none;
+  border: 1px solid var(--gh-chip-border, #e8e8e8);
+  background: var(--gh-chip-bg, #fafafa);
+  color: var(--gh-chip-fg, #222);
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color .12s ease-out, border-color .12s ease-out, color .12s ease-out, transform .06s ease-out;
+}
+
+#weeklyChronicleBody .linklike:hover {
+  background: var(--gh-chip-bg-hover, #f2f2f2);
+  border-color: var(--gh-chip-border-hover, #dcdcdc);
+  transform: translateY(-1px);
+}
+
+#weeklyChronicleBody .linklike:active {
+  transform: translateY(0);
+}
+
+/* Leerer Zustand */
+#weeklyChronicleBody .empty-state {
+  grid-column: 1 / -1;
+  padding: 18px;
+  text-align: center;
+  color: #666;
+  border: 1px dashed #ddd;
+  border-radius: 10px;
+  background: #fcfcfc;
+}
+
+/* Kompakter auf sehr schmalen Screens */
+@media (max-width: 420px) {
+  #weeklyChronicleBody {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  #weeklyChronicleBody .chronicle-row {
+    padding: 10px;
+  }
+}
+
+/* (Optional) Dark-Mode, wenn die Seite bereits prefers-color-scheme nutzt */
+@media (prefers-color-scheme: dark) {
+  #weeklyChronicleBody .chronicle-row {
+    background: var(--gh-surface, #151515);
+    border-color: var(--gh-border, #2a2a2a);
+    box-shadow: none;
+  }
+  #weeklyChronicleBody .chronicle-row:hover {
+    border-color: var(--gh-border-strong, #3a3a3a);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.3);
+  }
+  #weeklyChronicleBody .linklike {
+    background: var(--gh-chip-bg, #1b1b1b);
+    border-color: var(--gh-chip-border, #2b2b2b);
+    color: var(--gh-chip-fg, #eaeaea);
+  }
+  #weeklyChronicleBody .linklike:hover {
+    background: var(--gh-chip-bg-hover, #202020);
+    border-color: var(--gh-chip-border-hover, #3a3a3a);
+  }
+  #weeklyChronicleBody .empty-state {
+    background: #101010;
+    border-color: #2b2b2b;
+    color: #9a9a9a;
+  }
+}
