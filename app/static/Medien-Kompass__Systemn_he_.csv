@@ -1,59 +1,90 @@
-Medium,Systemnähe (X),Globalismus (Y)
-Zeit,0.7,0.8
-Spiegel,0.6,0.7
-Süddeutsche,0.7,0.8
-Handelsblatt,0.9,1.0
-Deutschlandfunk,0.8,0.8
-Tagesschau,1.0,0.9
-FAZ,0.9,0.6
-n-tv,0.8,0.7
-Focus,0.4,0.5
-Welt,0.4,0.4
-RP Online,0.5,0.6
-Stern,0.6,0.7
-Tichys Einblick,-0.6,-0.6
-Reitschuster,-0.8,-0.8
-Unzensuriert,-1.0,-1.0
-Achse des Guten,-0.7,-0.8
-Anti‑Spiegel,-1.0,-0.9
-Telepolis,-0.3,0.2
-NachDenkSeiten,-0.7,0.1
-Volksverpetzer,-0.4,0.6
-Krautzone,-0.6,-0.7
-Niggemeier/Übermedien,-0.1,0.5
-taz,-0.4,0.8
-junge Welt,-0.9,0.2
-NZZ Deutschland,0.8,0.5
-Watson Deutschland,0.3,0.6
-Frankfurter Rundschau,0.4,0.7
-Bild,0.1,-0.5
-Nius,-0.7,-0.8
-Deutsche Wirtschaftsnachrichten,-0.8,-0.6
-Manova,-0.9,0.0
-Auf1,-1.0,-1.0
-RT DE,-1.0,-0.9
-Correctiv,-0.2,0.9
-Netzpolitik.org,-0.5,0.7
-Norbert Häring,-0.6,0.1
-Overton‑Magazin (Politik),-0.6,0.2
-Berliner Zeitung (Politik),0.3,0.5
-der Freitag (Politik),-0.3,0.7
-Makroskop,-0.7,0.2
-German Foreign Policy,-0.8,0.3
-Infosperber (Politik),-0.3,0.8
-TauBlog (Politik),-0.6,0.2
-Jacobin Deutschland,-0.8,0.7
-Multipolar,-0.9,0.1
-Junge Freiheit,-0.5,-0.6
-neues deutschland,-0.8,0.4
-Blackout News,-0.7,-0.5
-Cicero,-0.3,0.2
-Alexander Wallasch,-0.8,-0.6
-rnd,0.6,0.5
-Compact,-0.9,-0.9
-Blätter für deutsche und internationale Politik,-0.2,0.8
-Epoch Times,-0.8,-0.7
-apolut,-0.8,-0.6
-t-online,+0.7,+0.6
-tkp,-0.7,-0.7
-Katapult,-0.2,+0.7
+Medium,Systemnähe (X),Globalismus (Y),Land
+Zeit,0.7,0.8,DE
+Spiegel,0.6,0.7,DE
+Süddeutsche,0.7,0.8,DE
+Handelsblatt,0.9,1.0,DE
+Deutschlandfunk,0.8,0.8,DE
+Tagesschau,1.0,0.9,DE
+FAZ,0.9,0.6,DE
+n-tv,0.8,0.7,DE
+Focus,0.4,0.5,DE
+Welt,0.4,0.4,DE
+RP Online,0.5,0.6,DE
+Stern,0.6,0.7,DE
+Tichys Einblick,-0.6,-0.6,DE
+Reitschuster,-0.8,-0.8,DE
+Unzensuriert,-1.0,-1.0,AT
+Achse des Guten,-0.7,-0.8,DE
+Anti‑Spiegel,-1.0,-0.9,DE
+Telepolis,-0.3,0.2,DE
+NachDenkSeiten,-0.7,0.1,DE
+Volksverpetzer,-0.4,0.6,DE
+Krautzone,-0.6,-0.7,DE
+Niggemeier/Übermedien,-0.1,0.5,DE
+taz,-0.4,0.8,DE
+junge Welt,-0.9,0.2,DE
+NZZ Deutschland,0.8,0.5,DE
+Watson Deutschland,0.3,0.6,DE
+Frankfurter Rundschau,0.4,0.7,DE
+Bild,0.1,-0.5,DE
+Nius,-0.7,-0.8,DE
+Deutsche Wirtschaftsnachrichten,-0.8,-0.6,DE
+Manova,-0.9,0.0,DE
+Auf1,-1.0,-1.0,AT
+RT DE,-1.0,-0.9,DE
+Correctiv,-0.2,0.9,DE
+Netzpolitik.org,-0.5,0.7,DE
+Norbert Häring,-0.6,0.1,DE
+Overton‑Magazin (Politik),-0.6,0.2,DE
+Berliner Zeitung (Politik),0.3,0.5,DE
+der Freitag (Politik),-0.3,0.7,DE
+Makroskop,-0.7,0.2,DE
+German Foreign Policy,-0.8,0.3,DE
+Infosperber (Politik),-0.3,0.8,CH
+TauBlog (Politik),-0.6,0.2,DE
+Jacobin Deutschland,-0.8,0.7,DE
+Multipolar,-0.9,0.1,DE
+Junge Freiheit,-0.5,-0.6,DE
+neues deutschland,-0.8,0.4,DE
+Blackout News,-0.7,-0.5,DE
+Cicero,-0.3,0.2,DE
+Alexander Wallasch,-0.8,-0.6,DE
+rnd,0.6,0.5,DE
+Compact,-0.9,-0.9,DE
+Blätter für deutsche und internationale Politik,-0.2,0.8,DE
+Epoch Times,-0.8,-0.7,DE
+apolut,-0.8,-0.6,DE
+t-online,+0.7,+0.6,DE
+tkp,-0.7,-0.7,AT
+Katapult,-0.2,+0.7,DE
+Falter,-0.2,+0.8,AT
+Die Presse,+0.6,+0.7,AT
+Der Standard,+0.4,+0.8,AT
+ORF,+0.9,+0.9,AT
+Blick,+0.4,+0.6,CH
+Watson Schweiz,+0.2,+0.7,CH
+NZZ Schweiz,+0.8,+0.5,CH
+Republik,-0.2,+0.6,CH
+Kronen Zeitung,-0.1,-0.2,AT
+Kurier,+0.5,+0.6,AT
+Hoch2,-0.8,-0.8,CH
+Apollo News,-0.5,-0.6,DE
+NEX24,-0.4,-0.5,VAE
+BildBlog,-0.3,+0.7,DE
+IRNA News,+0.9,-0.8,IRAN
+Granma,+1.0,+0.1,CUBA
+Weltwoche,-0.5,-0.6,CH
+Schweizerzeit,-0.8,-0.8,CH
+Lost in Europe,-0.3,+0.7,DE
+transition news,-0.9,-0.7,DE
+Globalbridge,+0.7,-0.3,CH
+Sciencefiles,-0.8,-0.5,DE
+Fassadenkratzer,-0.9,-0.6,DE
+Zeitpunkt,-0.4,+0.1,CH
+Ansage,-0.8,-0.7,DE
+Inside Paradeplatz,-0.5,+0.2,CH
+Hintergrund,-0.4,+0.4,DE
+The European,-0.2,+0.5,DE
+Freilich Magazin,-0.8,-0.7,AT
+Anderwelt Online,-0.9,-0.6,DE
+Publikumskonferenz,-0.6,+0.3,DE

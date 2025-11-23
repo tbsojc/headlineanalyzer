@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
   <script src="https://cdn.jsdelivr.net/npm/flatpickr" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/de.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js" defer></script>
 </head>
 <body>
 
@@ -71,7 +72,7 @@
 
   <section class="drawer-section">
     <h4>Quelle</h4>
-    <div id="biasFilters" class="btn-row">
+    <div class="biasFilters btn-row">
       <button type="button" data-bias="systemkritisch">Systemkritisch</button>
       <button type="button" data-bias="systemnah">Systemnah</button>
       <button type="button" data-bias="globalistisch">Globalistisch</button>
@@ -144,8 +145,33 @@
       <option value="t-online">t-online</option>
       <option value="tkp">tkp</option>
       <option value="Katapult">Katapult</option>
+      <option value="Blick">Blick</option>
+      <option value="Watson Schweiz">Watson Schweiz</option>
+      <option value="NZZ Schweiz">NZZ Schweiz</option>
+      <option value="Republik">Republik</option>
+      <option value="Kronen Zeitung">Kronen Zeitung</option>
+      <option value="Kurier">Kurier</option>
+      <option value="Hoch2">Hoch2</option>
+      <option value="Apollo News">Apollo News</option>
+      <option value="NEX24">NEX24</option>
+      <option value="BildBlog">BildBlog</option>
+      <option value="IRNA News">IRNA News</option>
+      <option value="Granma">Granma</option>
+      <option value="Weltwoche">Weltwoche</option>
+      <option value="Schweizerzeit">Schweizerzeit</option>
     </select>
   </section>
+
+  <section class="drawer-section">
+    <h4>Land</h4>
+    <div class="multiselect" id="countryMultiSelect">
+      <button type="button" id="countryMultiBtn">Alle Länder</button>
+      <div class="multiselect-panel" id="countryPanel" hidden>
+        <!-- per JS mit /countries befüllt -->
+      </div>
+    </div>
+  </section>
+
 
   <section class="drawer-section">
     <label class="teaser-inline">
@@ -167,57 +193,99 @@
       <div id="wordcloud"></div>
     </section>
 
+<section class="drawer-section">
+  <h4>Filter</h4>
+
+  <label class="wc-filter">
+    <span class="wc-filter__label">Anzahl Keywords:</span>
+    <input id="wcCount" class="wc-filter__range" type="range" min="10" max="250" step="5" value="120">
+    <span id="wcCountVal" class="wc-filter__value">120</span>
+  </label>
+
+  <label class="wc-filter">
+    <span class="wc-filter__label">Mindest­nennungen pro Keyword:</span>
+    <input id="wcMin" class="wc-filter__range" type="range" min="1" max="50" step="1" value="7">
+    <span id="wcMinVal" class="wc-filter__value">≥ 7×</span>
+  </label>
+
+  <div class="biasFilters btn-row">
+    <button type="button" data-bias="systemkritisch">Systemkritisch</button>
+    <button type="button" data-bias="systemnah">Systemnah</button>
+    <button type="button" data-bias="globalistisch">Globalistisch</button>
+    <button type="button" data-bias="nationalistisch">Nationalistisch</button>
+    <button type="button" id="biasClearBtn">Alle</button>
+  </div>
+
+</section>
+
+
+
 <section id="keywordTopAbsoluteSection">
-  <h2>📊 Top 30 Keywords nach absoluten Nennungen</h2>
-  <div id="keywordTopAbsoluteColumns" class="keyword-columns"></div>
+  <h2>Absolute Nennungen Top 25</h2>
+  <h3>Im gewählten Zeitraum – Vergleich mit identischem Zeitraum davor</h3>
+  <div id="keywordTopAbsoluteTableWrap"></div>
 </section>
-
-<section id="blindspotFeed" class="blindspot-feed">
-  <h2>🕳️ Blindspot-Feed (Keyword-basiert)</h2>
-  <!-- Blindspot-Controls -->
-  <div id="blindspotControls" class="blindspot-controls" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin:10px 0 18px 0">
-    <label style="display:flex;align-items:center;gap:8px">
-      Mindest-Quellen:
-      <input id="bsMinSources" type="range" min="1" max="50" step="1" value="2" />
-      <span id="bsMinSourcesVal">2</span>
-    </label>
-    <label style="display:flex;align-items:center;gap:8px">
-      Mindest-Erwähnungen:
-      <input id="bsMinTotal" type="range" min="1" max="50" step="1" value="10" />
-      <span id="bsMinTotalVal">10</span>
-    </label>
-    <label style="display:flex;align-items:center;gap:8px">
-      Blindspot-Wert (≤ %):
-      <input id="bsRatio" type="range" min="1" max="100" step="1" value="5" />
-      <span id="bsRatioVal">5%</span>
-    </label>
-  </div>
-  <div id="blindspotInfo" style="margin-top:8px;font-size:0.9em;color:#444"></div>
-  <div class="blindspot-grid">
-    <div class="blindspot-col" id="feedKritisch">
-      <h3>Kaum systemkritisch</h3>
-      <ul></ul>
-    </div>
-    <div class="blindspot-col" id="feedNah">
-      <h3>Kaum systemnah</h3>
-      <ul></ul>
-    </div>
-    <div class="blindspot-col" id="feedNational">
-      <h3>Kaum nationalistisch</h3>
-      <ul></ul>
-    </div>
-    <div class="blindspot-col" id="feedGlobal">
-      <h3>Kaum globalistisch</h3>
-      <ul></ul>
-    </div>
-  </div>
-</section>
-
 
 <section id="keywordTrends" class="trend-section trends--minimal">
   <h2>📈 Dynamische Keyword-Trends</h2>
   <div class="trend-grid" id="trendGrid"></div>
 </section>
+
+<section id="blindspotFeed" class="blindspot-feed">
+  <h2>Echokammern</h2>
+  <!-- Blindspot-Controls -->
+<div id="blindspotControls" class="blindspot-controls" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin:10px 0 18px 0">
+  <label style="display:flex;align-items:center;gap:8px">
+    Anzahl-Quellen:
+    <span class="dual-lite">
+      <input id="bsMinSourcesMin" type="range" min="1" max="50" step="1" value="2">
+      <input id="bsMinSourcesMax" type="range" min="1" max="50" step="1" value="50">
+    </span>
+    <span id="bsMinSourcesVal">2 – 10</span>
+  </label>
+
+  <label style="display:flex;align-items:center;gap:8px">
+    Anzahl-Erwähnungen:
+    <span class="dual-lite">
+      <input id="bsMinTotalMin" type="range" min="1" max="50" step="1" value="10">
+      <input id="bsMinTotalMax" type="range" min="1" max="50" step="1" value="50">
+    </span>
+    <span id="bsMinTotalVal">10 – 20</span>
+  </label>
+
+  <label style="display:flex;align-items:center;gap:8px">
+    Echokammer-Wert (in %):
+    <span class="dual-lite">
+      <input id="bsRatioMin" type="range" min="0" max="100" step="1" value="70">
+      <input id="bsRatioMax" type="range" min="0" max="100" step="1" value="100">
+    </span>
+    <span id="bsRatioVal">1 % – 5 %</span>
+  </label>
+</div>
+
+  <div id="blindspotInfo" style="margin-top:8px;font-size:0.9em;color:#444"></div>
+  <div class="blindspot-grid">
+    <div class="blindspot-col" id="feedKritisch">
+      <h3>Systemkritisch</h3>
+      <ul class="blindspot-list"></ul>
+    </div>
+    <div class="blindspot-col" id="feedNah">
+      <h3>Systemnah</h3>
+      <ul class="blindspot-list"></ul>
+    </div>
+    <div class="blindspot-col" id="feedNational">
+      <h3>Nationalistisch</h3>
+      <ul class="blindspot-list"></ul>
+    </div>
+    <div class="blindspot-col" id="feedGlobal">
+      <h3>Globalistisch</h3>
+      <ul class="blindspot-list"></ul>
+    </div>
+  </div>
+</section>
+
+
+
 
 <section id="weeklyChronicle" class="chart-box">
   <h2>🗓️ Chronik: Top-Keywords je Kalenderwoche</h2>
@@ -258,7 +326,19 @@
       Keine Heatmap-Daten
     </div>
   </div>
+
+    <!-- Sankey: Medien-Buckets -> Keyword -->
+  <div id="keywordSankeyWrap" class="sankey-wrap">
+    <svg id="keywordSankey" class="sankey-canvas"></svg>
+    <div id="keywordSankeyEmpty" class="chart-overlay-empty is-hidden">
+      Kein Sankey – bitte ein Keyword wählen
+    </div>
+  </div>
+
 </section>
+
+
+
 
   <div id="filteredArticles"></div>
 
@@ -329,6 +409,7 @@
     let mediaCompassChart = null;
     let selectedKeyword = "";
     let _lastCompassKey = '';
+    let USER_TIME_OVERRIDE = false;
 
     // Zentrale Filter – eine Quelle der Wahrheit
     const FILTERS = {
@@ -341,11 +422,20 @@
     };
 
     const ACTIVE_SOURCES = new Set();        // ← neue Mehrfachauswahl
+    const ACTIVE_COUNTRIES = new Set();
     const activeBiasFilters = new Set();     // ← ersetzt Single-Bias
     const BLINDSPOT_UI = {
-      min_sources: 2,   // NEU: Mindestzahl an Quellen
-      min_total: 10,    // Mindest-Erwähnungen
-      ratio_max: 0.05   // 5%  (als Dezimalzahl)
+      min_sources: 2,        // (Legacy – bleibt vorerst)
+      min_total: 10,         // (Legacy – bleibt vorerst)
+      ratio_max: 0.05,       // (Legacy – bleibt vorerst)
+      // NEU: echte Bereiche
+      min_sources_range: [2, 10],
+      min_total_range:   [10, 20],
+      ratio_range:       [0.01, 0.05]   // Dezimal (1–5 %)
+    };
+    const WORDCLOUD_CFG = {
+      maxWords: 120,   // 10..250
+      minCount: 7      // 1..50
     };
 
     // Kompatibilität: alter Code darf noch "filters" benutzen
@@ -390,6 +480,8 @@
       document.getElementById("sourceSelect").value = FILTERS.source || "";
       document.getElementById("keywordInput").value = FILTERS.keyword || "";
       document.getElementById("teaserToggle").checked = !!FILTERS.teaser;
+
+      initCountryPanel();
 
       // Initiale Datenladungen
       loadWordcloud();
@@ -475,12 +567,116 @@ window.addEventListener('load', () => {
   updateSourceBtnLabel();
 });
 
+window.addEventListener('load', () => {
+  const elCount = document.getElementById('wcCount');
+  const elCountVal = document.getElementById('wcCountVal');
+  const elMin = document.getElementById('wcMin');
+  const elMinVal = document.getElementById('wcMinVal');
+
+  if (elCount && elCountVal) {
+    const syncCount = (commit=false) => {
+      WORDCLOUD_CFG.maxWords = parseInt(elCount.value, 10);
+      elCountVal.textContent = WORDCLOUD_CFG.maxWords;
+      if (commit) { loadWordcloud(); renderActiveFilterChips(); }
+    };
+    elCount.addEventListener('input', () => syncCount(false));
+    ['change','mouseup','touchend'].forEach(ev => elCount.addEventListener(ev, () => syncCount(true)));
+    syncCount(false);
+  }
+
+  if (elMin && elMinVal) {
+    const syncMin = (commit=false) => {
+      WORDCLOUD_CFG.minCount = parseInt(elMin.value, 10);
+      elMinVal.textContent = `≥ ${WORDCLOUD_CFG.minCount}×`;
+      if (commit) { loadWordcloud(); renderActiveFilterChips(); }
+    };
+    elMin.addEventListener('input', () => syncMin(false));
+    ['change','mouseup','touchend'].forEach(ev => elMin.addEventListener(ev, () => syncMin(true)));
+    syncMin(false);
+  }
+});
+
+
+async function initCountryPanel(){
+  const panel = document.getElementById('countryPanel');
+  const btn   = document.getElementById('countryMultiBtn');
+  if (!panel || !btn) return;
+
+  try {
+    const res = await fetch('/countries', { cache: 'no-store' });
+    const data = await res.json();
+    const codes = Array.isArray(data.countries) ? data.countries : [];
+
+    const frag = document.createDocumentFragment();
+    codes.forEach(code => {
+      const id = `cty_${code}`;
+      const label = document.createElement('label');
+      label.setAttribute('for', id);
+      label.innerHTML = `<input type="checkbox" id="${id}" class="country-box" value="${code}"> ${code}`;
+      frag.appendChild(label);
+    });
+    panel.replaceChildren(frag);
+
+    // Vorbelegung aus URL
+    const params = new URLSearchParams(location.search);
+    const pre = params.getAll('country');
+    ACTIVE_COUNTRIES.clear();
+    for (const c of pre) if (c && c.trim()) ACTIVE_COUNTRIES.add(c.trim().toUpperCase());
+
+    // Häkchen setzen
+    panel.querySelectorAll('.country-box').forEach(cb => {
+      cb.checked = ACTIVE_COUNTRIES.has(cb.value);
+    });
+
+    updateCountryBtnLabel();
+  } catch (e) {
+    console.error('countries init failed', e);
+  }
+}
+
+function updateCountryBtnLabel(){
+  const btn = document.getElementById('countryMultiBtn');
+  const n = ACTIVE_COUNTRIES.size;
+  btn.textContent = n === 0 ? 'Alle Länder' : `${n} ausgewählt`;
+}
+
+function appendCountries(qs){
+  if (ACTIVE_COUNTRIES.size === 0) return;
+  for (const c of ACTIVE_COUNTRIES) qs.append('country', c);
+}
+
+// Panel togglen & Outside-Click
+document.getElementById('countryMultiBtn').addEventListener('click', () => {
+  const p = document.getElementById('countryPanel');
+  p.hidden = !p.hidden;
+});
+document.addEventListener('click', (e) => {
+  const btn = document.getElementById('countryMultiBtn');
+  const panel = document.getElementById('countryPanel');
+  if (!panel.contains(e.target) && e.target !== btn) panel.hidden = true;
+});
+
+// Checkbox-Änderungen
+document.getElementById('countryPanel').addEventListener('change', (e) => {
+  if (!e.target.classList.contains('country-box')) return;
+  const val = e.target.value.toUpperCase();
+  if (e.target.checked) ACTIVE_COUNTRIES.add(val);
+  else ACTIVE_COUNTRIES.delete(val);
+  updateCountryBtnLabel();
+  updateURLFromFilters(false);
+  applyFilters();
+});
 
 
   function getFiltersFromURL() {
     const p = new URLSearchParams(location.search);
     const from = p.get('from');
     const to   = p.get('to');
+
+    const countries = new URLSearchParams(location.search).getAll('country');
+    ACTIVE_COUNTRIES.clear();
+    for (const c of countries) if (c && c.trim()) ACTIVE_COUNTRIES.add(c.trim().toUpperCase());
+
 
     FILTERS.source  = p.get('source')  || null;
     FILTERS.keyword = p.get('keyword') || null;
@@ -517,6 +713,9 @@ window.addEventListener('load', () => {
     p.set('to',   FILTERS.to);
     if (ACTIVE_SOURCES.size > 0) {
       for (const s of ACTIVE_SOURCES) p.append('source', s);
+    }
+    if (ACTIVE_COUNTRIES.size > 0) {
+      for (const c of ACTIVE_COUNTRIES) p.append('country', c);
     }
     if (FILTERS.keyword) p.set('keyword', FILTERS.keyword);
     if (FILTERS.teaser)  p.set('teaser', '1');
@@ -601,6 +800,7 @@ async function searchByKeyword(kw = null) {
 async function loadFilteredArticles(page = 1) {
   const qs = new URLSearchParams();
   appendSources(qs);
+  appendCountries(qs);
   if (FILTERS.keyword) qs.set("keyword", FILTERS.keyword);
   if (FILTERS.teaser)  qs.set("teaser", "true");
   qs.set("page", String(page));
@@ -625,28 +825,56 @@ function renderFilteredArticles(list) {
     el.innerHTML = `
       <div class="empty-state">
         Keine Artikel im gewählten Zeitraum.
-        <span class="hint">Tipp: Erhöhe den Zeitraum (z. B. 7d) oder entferne Filter.</span>
+        <span class="hint">Tipp: Erhöhe den Zeitraum oder entferne Filter.</span>
       </div>`;
     return;
   }
 
-  el.innerHTML = list.map(a => `
-    <article class="article-card" style="border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin:10px 0;background:#fff">
-      <div class="muted" style="font-size:.85rem">${new Date(a.published_at).toLocaleString('de-DE')}</div>
-      <h3 style="margin:.2rem 0 .4rem 0">
-        <a href="${a.url}" target="_blank" rel="noopener">${a.title ?? ""}</a>
-      </h3>
-      ${a.teaser ? `<p class="muted" style="margin:.3rem 0 0 0">${a.teaser}</p>` : ""}
-      <div class="muted" style="font-size:.85rem;margin-top:.25rem">${a.source ?? ""}</div>
-    </article>
-  `).join("");
+  el.innerHTML = `
+    <div class="article-list">
+      ${list.map(a => `
+        <article class="article-card">
+          <header class="article-header">
+            <h3 class="article-title">
+              <a href="${a.url}" target="_blank" rel="noopener">${a.title ?? ""}</a>
+            </h3>
+          </header>
+          ${a.teaser ? `<p class="article-teaser">${a.teaser}</p>` : ""}
+          <footer class="article-meta">
+            <span class="article-source">${a.source ?? "Unbekannte Quelle"}</span>
+            <span class="article-date">${new Date(a.published_at).toLocaleString("de-DE")}</span>
+          </footer>
+        </article>
+      `).join("")}
+    </div>
+  `;
 }
 
 async function loadKeywordTrends() {
-  const res = await fetch("/keywords/trending");
-  const data = await res.json();
+  const qs = new URLSearchParams();
+
+  // Kombilänge
+  if (FILTERS.ngram) qs.set("ngram", String(FILTERS.ngram));
+
+  // Teaser
+  if (FILTERS.teaser) qs.set("teaser", "true");
+
+  // Quellen-Mehrfachauswahl
+  appendSources(qs);
+
+  // Länder-Mehrfachauswahl
+  appendCountries(qs);
+
+  const url = withTime("/keywords/trending", qs.toString());
+  const res = await fetch(url, { cache: "no-store" });
 
   const grid = document.getElementById("trendGrid");
+  if (!res.ok) {
+    grid.innerHTML = `<div class="empty-state">Fehler beim Laden (${res.status}).</div>`;
+    return;
+  }
+
+  const data = await res.json();
   grid.innerHTML = "";
 
   for (const label of ["24h", "72h", "7d", "30d"]) {
@@ -671,16 +899,28 @@ async function loadKeywordTrends() {
       const ul = document.createElement("ul");
       for (const item of entry[type]) {
         const li = document.createElement("li");
-        const pctChange = Math.round(item.change * 100); // von Dezimal in %
+
+        // Backend liefert:
+        // now, prev, delta, change_pct (in % oder null = "neu")
+        let pctLabel;
+        let cls;
+
+        if (item.change_pct === null || typeof item.change_pct === "undefined") {
+          pctLabel = "neu";
+          cls = "trend-up";
+        } else {
+          const val = item.change_pct;
+          const sign = val >= 0 ? "+" : "";
+          pctLabel = `${sign}${Math.round(val)}%`;
+          cls = val >= 0 ? "trend-up" : "trend-down";
+        }
 
         li.innerHTML = `
           ${item.word}
-          <span class="${pctChange >= 0 ? 'trend-up' : 'trend-down'}">
-            (${item.delta >= 0 ? "+" : ""}${item.delta} | ${pctChange >= 0 ? "+" : ""}${pctChange}%)
+          <span class="${cls}">
+            (${item.delta >= 0 ? "+" : ""}${item.delta} | ${pctLabel})
           </span>
         `;
-        li.title = `Aktuell: ${item.delta + (item.delta >= 0 ? "+" : "")} vs. Vorher: ${item.delta - item.delta}`;
-
         li.onclick = () => searchByKeyword(item.word);
         ul.appendChild(li);
       }
@@ -693,83 +933,121 @@ async function loadKeywordTrends() {
   }
 }
 
+
 async function loadTopAbsoluteKeywords() {
+  // ➜ Tage aus aktuellem Zeitraum ableiten (min 1, max 30 – Serverlimit)
+  const spanDays = (() => {
+    try {
+      const from = new Date(FILTERS.from);
+      const to   = new Date(FILTERS.to);
+      const diff = Math.ceil((to - from) / 86400000);
+      return Math.min(Math.max(diff, 1), 30);
+    } catch { return 7; }
+  })();
+
   const qs = new URLSearchParams({
     ngram: String(FILTERS.ngram ?? 1),
-    compare_prev: "1"
+    compare_prev: "1",
+    top_n: "25",
+    spark_days: String(spanDays)
   });
   if (FILTERS.teaser) qs.set("teaser", "true");
-
-  // Quellen hinzufügen (Mehrfachauswahl)
   appendSources(qs);
+  appendCountries(qs);
 
-  // Zeit via Helper + Cache zuverlässig ausschalten
   const url = withTime("/keywords/top-absolute", qs.toString());
-  const res = await fetch(url, { cache: "no-store" });   // <- FIX
+  const res = await fetch(url, { cache: "no-store" });
+  const wrap = document.getElementById("keywordTopAbsoluteTableWrap");
+  if (!wrap) return;
+
   if (!res.ok) {
-    document.querySelector("#keywordTopAbsoluteColumns").innerHTML =
-      `<div class="empty-state">Fehler beim Laden (${res.status})</div>`;
+    wrap.innerHTML = `<div class="empty-state">Fehler beim Laden (${res.status}).</div>`;
     return;
   }
-  const data = await res.json(); // Backend liefert Array mit {word,current,previous,delta,change_pct}
+  const data = await res.json();
 
-  const container = document.querySelector("#keywordTopAbsoluteColumns");
-  container.innerHTML = "";
-
-  const chunkSize = 10; // 3 Spalten à 10
-  for (let i = 0; i < 3; i++) {
-    const chunk = data.slice(i * chunkSize, (i + 1) * chunkSize);
-
-    const colDiv = document.createElement("div");
-    colDiv.className = "keyword-column";
-
-    const table = document.createElement("table");
-    table.innerHTML = `
-      <thead>
-        <tr>
-          <th>Keyword</th>
-          <th>Aktuell</th>
-          <th>Δ abs</th>
-          <th>Δ %</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    `;
-    const tbody = table.querySelector("tbody");
-
-    chunk.forEach(row => {
-      const curr = Number(row.current ?? 0);
-      const prev = Number(row.previous ?? 0);
-      const delta = Number.isFinite(row.delta) ? row.delta : (curr - prev);
-
-      // Anzeige-Logik für Prozent:
-      // - Wenn prev==0 und curr>0 -> "neu"
-      // - sonst gerundet ausgeben (zur Not aus row.change_pct)
-      let pctDisplay;
-      if (prev === 0 && curr > 0) {
-        pctDisplay = "neu";
-      } else {
-        const pct = Number.isFinite(row.change_pct) ? row.change_pct : (delta / (prev || 1) * 100);
-        pctDisplay = `${pct >= 0 ? "+" : ""}${Math.round(pct)}%`;
-      }
-
-      const trendClass = delta >= 0 ? "trend-up" : "trend-down";
-
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${row.word}</td>
-        <td>${curr}</td>
-        <td class="${trendClass}">${delta >= 0 ? "+" : ""}${delta}</td>
-        <td class="${trendClass}">${pctDisplay}</td>
-      `;
-      tr.style.cursor = "pointer";
-      tr.onclick = () => searchByKeyword(row.word);
-      tbody.appendChild(tr);
-    });
-
-    colDiv.appendChild(table);
-    container.appendChild(colDiv);
+  if (!Array.isArray(data) || data.length === 0) {
+    wrap.innerHTML = `<div class="empty-state">Keine Daten im gewählten Zeitraum.</div>`;
+    return;
   }
+
+  // Mini-SVG Sparkline (unverändert)
+  function svgColumnSpark(values = [], {w=90, h=18, gap=2} = {}) {
+    if (!values.length) return "—";
+    const max = Math.max(...values, 1);
+    const n = values.length;
+    const barW = Math.max(1, Math.floor((w - gap*(n-1)) / n));
+    let x = 0;
+    const bars = values.map(v => {
+      const bh = Math.max(1, Math.round((v / max) * (h - 1)));
+      const y = h - bh;
+      const rect = `<rect x="${x}" y="${y}" width="${barW}" height="${bh}" rx="1" ry="1"></rect>`;
+      x += barW + gap;
+      return rect;
+    }).join("");
+    return `<svg class="spark spark--cols" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true">${bars}</svg>`;
+  }
+
+  // 🆕 Hilfsfunktion: Rang-Vergleich mit Pfeil
+  function renderRankChange(current, previous) {
+    if (!previous || previous === 0) return `${current} <span class="rank-dash">–</span>`;
+    const diff = previous - current;
+    let arrow = '<span class="rank-dash">–</span>';
+    if (diff > 0) arrow = '<span class="rank-up">▲</span>';
+    else if (diff < 0) arrow = '<span class="rank-down">▼</span>';
+    return `${current} ${arrow} <span class="rank-prev">(${previous})</span>`;
+  }
+
+  // Tabelle rendern – Spaltenkopf „7-Tage“ → dynamisch
+  const table = document.createElement("table");
+  table.className = "topabs-table";
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Keyword</th>
+        <th>Aktuell</th>
+        <th>${spanDays}-Tage</th>
+        <th>Rang (vorher)</th>
+        <th>Vorher</th>
+        <th>Δ abs</th>
+        <th>Δ %</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  `;
+  const tbody = table.querySelector("tbody");
+
+  data.forEach((row, idx) => {
+    const tr = document.createElement("tr");
+    const pctDisplay = (row.previous === 0 && row.current > 0)
+      ? "neu"
+      : `${row.change_pct >= 0 ? "+" : ""}${Math.round(row.change_pct)}%`;
+
+    const sparkHTML = Array.isArray(row.spark) && row.spark.length
+      ? svgColumnSpark(row.spark)
+      : "—";
+
+    tr.innerHTML = `
+      <td>${row.rank_current ?? (idx + 1)}</td>
+      <td><button class="linklike" data-kw="${row.word}">${row.word}</button></td>
+      <td>${row.current}</td>
+      <td class="sparkcell">${sparkHTML}</td>
+      <td class="rank-cell">
+        ${renderRankChange(row.rank_current, row.rank_prev)}
+      </td>
+      <td>${row.previous}</td>
+      <td class="${row.delta >= 0 ? 'trend-up':'trend-down'}">
+        ${row.delta >= 0 ? "+" : ""}${row.delta}
+      </td>
+      <td class="${row.delta >= 0 ? 'trend-up':'trend-down'}">${pctDisplay}</td>
+    `;
+    tr.querySelector('button[data-kw]').addEventListener('click', () => searchByKeyword(row.word));
+    tbody.appendChild(tr);
+  });
+
+  wrap.innerHTML = "";
+  wrap.appendChild(table);
 }
 
 
@@ -866,15 +1144,17 @@ async function setBiasAndSelectSources(biasName) {
   applyFilters();
 }
 
-// 5) Click-Binding für deine Bias-Buttons (und „Alle“)
-document.getElementById('biasFilters').addEventListener('click', (e) => {
+
+// Klicks auf beliebige Bias-Buttons abfangen (egal wo sie im DOM stehen)
+document.addEventListener('click', (e) => {
   const btnBias = e.target.closest('button[data-bias]');
   if (btnBias) {
     e.preventDefault();
     setBiasAndSelectSources(btnBias.dataset.bias);
     return;
   }
-  if (e.target.id === 'biasClearBtn') {
+  const clearBtn = e.target.closest('[data-role="bias-clear"]');
+  if (clearBtn) {
     e.preventDefault();
     setBiasAndSelectSources('alle');
   }
@@ -1134,6 +1414,7 @@ function getBiasGradientColor(x, y) {
 async function loadWordcloud() {
   const qs = new URLSearchParams();
   appendSources(qs);
+  appendCountries(qs);
   if (FILTERS.keyword) qs.set("keyword", FILTERS.keyword);
   if (FILTERS.teaser)  qs.set("teaser", "true");
   if (FILTERS.ngram)   qs.set("ngram", String(FILTERS.ngram));
@@ -1141,9 +1422,11 @@ async function loadWordcloud() {
   const data = await res.json();
 
   const words = data
-    .filter(([_, count]) => count >= 3)
+    .filter(([_, count]) => count >= WORDCLOUD_CFG.minCount)
     .map(([text, count]) => ({ text, count }))
-    .sort((a, b) => b.count - a.count); // sortiere nach Häufigkeit absteigend
+    .sort((a, b) => b.count - a.count)
+    .slice(0, WORDCLOUD_CFG.maxWords);   // Top-N gemäß Slider
+
 
 
   d3.select("#wordcloud").html(""); // alte SVG löschen
@@ -1189,23 +1472,52 @@ async function loadWordcloud() {
 
 
 
-  function draw(words) {
-    const svg = d3.select("#wordcloud").append("svg")
-      .attr("width", window.innerWidth)
-      .attr("height", window.innerHeight);
+function draw(words) {
+  const svg = d3.select("#wordcloud").append("svg")
+    .attr("width", window.innerWidth)
+    .attr("height", window.innerHeight);
 
-    const g = svg.append("g")
-      .attr("transform", `translate(${window.innerWidth / 2},${window.innerHeight / 2})`);
+  const g = svg.append("g")
+    .attr("transform", `translate(${window.innerWidth / 2},${window.innerHeight / 2})`);
 
+  // 1) Counts auslesen
+  const counts = words.map(w => w.count);
+  const minCount = Math.min(...counts);
+  const maxCount = Math.max(...counts);
+
+  // 2) Farbskala: wenig -> #434343, viel -> #000000 (wie zuvor gewünscht)
+  const colorScale = d3.scaleLinear()
+    .domain([minCount, maxCount])
+    .range(["#434343", "#000000"]);
+
+  // 3) Fontsize mit leichtem Boost (pow > 1) betont hohe Counts → bleiben zentral
+  const sizeScale = d3.scalePow()
+    .exponent(1.35)                        // 1.2–1.5 ist ein guter Bereich
+    .domain([minCount, maxCount])
+    .range([24, 80]);                      // ggf. anpassen
+
+  // 4) Layout: größte zuerst, keine Rotation, archimedische Spirale
+  d3.layout.cloud()
+    .size([window.innerWidth, window.innerHeight])
+    .words(words.sort((a, b) => b.count - a.count))  // größte zuerst = landen näher am Zentrum
+    .rotate(() => 0)                                 // kompakter, besseres Zentrieren
+    .padding(d => (d.count >= (minCount + (maxCount-minCount)*0.6)) ? 4 : 1) // mehr Platz um Top-Wörter
+    .font("Lato")
+    .fontSize(d => sizeScale(d.count))
+    .spiral("archimedean")
+    .on("end", place)
+    .start();
+
+  function place(placed) {
     const texts = g.selectAll("text")
-      .data(words)
+      .data(placed)
       .enter().append("text")
-      .style("font-size", d => scaleFontSize(d.count) + "px")
+      .style("font-size", d => `${d.size}px`)
       .style("font-family", "Lato")
-      .style("fill", () => d3.schemeCategory10[Math.floor(Math.random() * 10)])
+      .style("fill", d => colorScale(d.count))        // monochromer Verlauf
       .style("font-weight", d => scaleFontWeight(d.count))
       .attr("text-anchor", "middle")
-      .attr("transform", d => `translate(${d.x},${d.y})rotate(${d.rotate})`)
+      .attr("transform", d => `translate(${d.x},${d.y})rotate(${d.rotate || 0})`)
       .text(d => d.text);
 
     texts.append("title").text(d => `${d.text}: ${d.count}x`);
@@ -1217,6 +1529,9 @@ async function loadWordcloud() {
       loadWordcloud();
     });
   }
+}
+
+
 }
 
 
@@ -1301,15 +1616,23 @@ function drawMediaCompass(data, label = "Medien") {
 
 
 function resetFilters() {
+  USER_TIME_OVERRIDE = false;  // ← zurück auf Default-5-Wochen-Logik für die Chronik
+
   const endEx = nowExclusive();
   FILTERS.from = toLocalIsoWithTZ(startOfDay(new Date(endEx.getTime() - 6*86400000)));
   FILTERS.to   = toLocalIsoWithTZ(endEx);
   FILTERS.source=""; FILTERS.keyword=""; FILTERS.teaser=false; FILTERS.ngram=1;
+
   ACTIVE_SOURCES.clear();
   updateSourceBtnLabel();
   const panel = document.getElementById('sourcePanel');
   if (panel) panel.querySelectorAll('.source-box').forEach(cb => cb.checked = false);
 
+  // LÄNDER-Reset  <<<<<<<<<<<<<<<< NEU
+  ACTIVE_COUNTRIES.clear();
+  updateCountryBtnLabel();
+  const cpanel = document.getElementById('countryPanel');
+  if (cpanel) cpanel.querySelectorAll('.country-box').forEach(cb => cb.checked = false);
 
   document.getElementById("sourceSelect").value = "";
   document.getElementById("keywordInput").value = "";
@@ -1522,6 +1845,7 @@ async function renderKeywordTimeline(keyword) {
   const qs = new URLSearchParams({ word: keyword });
   if (FILTERS.teaser) qs.set("teaser", "true");
   appendSources(qs);
+  appendCountries(qs);
 
   const res = await fetch(withTime("/keywords/timeline", qs.toString()));
   if (!res.ok) return;
@@ -1602,18 +1926,205 @@ async function renderKeywordTimeline(keyword) {
   }
 }
 
+async function loadKeywordSankey(word) {
+  const wrap = document.getElementById('keywordSankeyWrap');
+  const svg = d3.select('#keywordSankey');
+  const ov = document.getElementById('keywordSankeyEmpty');
+  if (!wrap || !svg.node()) return;
+
+  // Kein Keyword -> Empty anzeigen
+  if (!word) {
+    svg.selectAll('*').remove();
+    if (ov) {
+      ov.classList.remove('is-hidden');
+      ov.textContent = 'Kein Sankey – bitte ein Keyword wählen';
+    }
+    return;
+  }
+
+  // Query bauen (inkl. from/to, country/source, teaser)
+  const qs = new URLSearchParams({ word });
+  if (FILTERS?.teaser) qs.set('teaser', 'true');
+  appendSources(qs);
+  appendCountries(qs);
+
+  // Daten abrufen
+  const res = await fetch(withTime('/keywords/sankey', qs.toString()), { cache: 'no-store' });
+  if (!res.ok) {
+    svg.selectAll('*').remove();
+    if (ov) {
+      ov.classList.remove('is-hidden');
+      ov.textContent = `Fehler (${res.status})`;
+    }
+    return;
+  }
+
+  const data = await res.json();
+  const items = data?.items || [];
+  const totalSum = d3.sum(items, d => d.total_sources);
+
+  if (!items.length || totalSum === 0) {
+    svg.selectAll('*').remove();
+    if (ov) {
+      ov.classList.remove('is-hidden');
+      ov.textContent = 'Keine Daten im gewählten Zeitraum';
+    }
+    return;
+  }
+
+  if (ov) ov.classList.add('is-hidden');
+
+  // --- D3-Sankey vorbereiten ---
+  svg.selectAll('*').remove();
+  const width = wrap.clientWidth;
+  const height = wrap.clientHeight;
+  svg.attr('viewBox', `0 0 ${width} ${height}`).attr('width', width).attr('height', height);
+
+  // Knoten: 4 Bereiche + Keyword + versteckter Rest-Sammelknoten
+  const LEFT = ["systemkritisch", "systemnah", "globalistisch", "nationalistisch"];
+  const nodes = [...LEFT.map(n => ({ name: n })), { name: word }, { name: "__rest__" }];
+
+  // Links: Treffer → Keyword, Rest → __rest__
+  const links = [];
+  for (const it of items) {
+    const srcIdx = LEFT.indexOf(it.bucket);
+    if (srcIdx < 0) continue;
+    const used = Math.max(0, it.hit_sources);
+    const rest = Math.max(0, it.total_sources - it.hit_sources);
+
+    links.push({
+      source: srcIdx,
+      target: LEFT.length, // Keyword-Index
+      value: used,
+      meta: { ...it, type: "used" }
+    });
+
+    if (rest > 0) {
+      links.push({
+        source: srcIdx,
+        target: LEFT.length + 1, // __rest__
+        value: rest,
+        meta: { ...it, type: "rest" }
+      });
+    }
+  }
+
+  // Layout berechnen
+  const sankey = d3.sankey()
+    .nodeWidth(18)
+    .nodePadding(18)
+    .extent([[8, 8], [width - 8, height - 8]]);
+
+  const graph = sankey({
+    nodes: nodes.map(d => ({ ...d })),
+    links: links.map(d => ({ ...d }))
+  });
+
+  // Farbskala
+  const color = d3.scaleOrdinal()
+    .domain(LEFT)
+    .range(["#cbd5e1", "#93c5fd", "#a5b4fc", "#9bd3ff"]);
+
+  // --- Links zeichnen ---
+  svg.append("g")
+    .attr("fill", "none")
+    .selectAll("path")
+    .data(graph.links)
+    .join("path")
+      .attr("d", d3.sankeyLinkHorizontal())
+      .attr("class", d =>
+        d.meta.type === "rest"
+          ? "sankey-link sankey-link--rest"
+          : "sankey-link sankey-link--used"
+      )
+      .attr("stroke", d => color(d.meta.bucket))
+      .attr("stroke-width", d => Math.max(1, d.width))
+      .append("title")
+        .text(d => {
+          const m = d.meta;
+          return (m.type === "rest")
+            ? `${m.bucket} → (ohne Keyword)\nMedien: ${m.total_sources - m.hit_sources} von ${m.total_sources}`
+            : `${m.bucket} → ${word}\nMedien: ${m.hit_sources} von ${m.total_sources} (${m.pct}%)`;
+        });
+
+  // --- Nodes zeichnen (REST-Node auslassen) ---
+  const node = svg.append("g")
+    .selectAll("g")
+    .data(graph.nodes.filter(n => n.name !== "__rest__"))
+    .join("g");
+
+  node.append("rect")
+    .attr("x", d => d.x0)
+    .attr("y", d => d.y0)
+    .attr("height", d => Math.max(2, d.y1 - d.y0))
+    .attr("width", d => d.x1 - d.x0)
+    .attr("rx", 6)
+    .attr("ry", 6)
+    .attr("class", d =>
+      LEFT.includes(d.name)
+        ? "sankey-node sankey-node--left"
+        : "sankey-node sankey-node--right"
+    )
+    .attr("fill", d =>
+      LEFT.includes(d.name) ? color(d.name) : "#4f6fd6"
+    );
+
+  // --- Labels ---
+  node.append("text")
+    .attr("x", d => (LEFT.includes(d.name) ? (d.x0 - 8) : (d.x1 + 8)))
+    .attr("y", d => (d.y0 + d.y1) / 2)
+    .attr("dy", "0.35em")
+    .attr("text-anchor", d => (LEFT.includes(d.name) ? "end" : "start"))
+    .attr("class", "sankey-label")
+    .text(d => {
+      if (!LEFT.includes(d.name)) return word;
+      const m = items.find(it => it.bucket === d.name) || { total_sources: 0, hit_sources: 0, pct: 0 };
+      return `${d.name}  ${m.hit_sources}/${m.total_sources} (${m.pct}%)`;
+    });
+
+  // --- Pfeil vorm Keyword ---
+  const kw = graph.nodes.find(n => n.name === word);
+  if (kw) {
+    svg.append("text")
+      .attr("x", kw.x0 - 14)
+      .attr("y", (kw.y0 + kw.y1) / 2)
+      .attr("dy", "0.35em")
+      .attr("text-anchor", "end")
+      .attr("class", "sankey-arrow")
+      .text("→");
+  }
+}
+
+
+// Beim Keyword-Suchen mit ausführen:
+const _searchByKeyword_Sankey = searchByKeyword;
+searchByKeyword = async function(kw){
+  await _searchByKeyword_Sankey(kw);
+  // danach Sankey aktualisieren
+  const k = kw || (document.getElementById('keywordInput')?.value || '').trim();
+  loadKeywordSankey(k);
+};
+
+// Erstmaliger Zustand (ohne Keyword -> Empty)
+window.addEventListener('load', () => loadKeywordSankey(''));
+
+
 
 async function loadWeeklyChronicle() {
-  const weeks = 10; // wie gewünscht: immer die letzten 10 Wochen (außer bei manuellem Zeitraum)
+  const weeks = 8; // zum Start 5 Wochen
   const body = document.getElementById("weeklyChronicleBody");
   body.innerHTML = `<div class="empty-state">Wird geladen…</div>`;
 
   const qs = new URLSearchParams({ weeks: String(weeks) });
   appendSources(qs);
+  appendCountries(qs);
   if (FILTERS.teaser) qs.set("teaser", "true");
 
+  // WICHTIG: KEIN withTime() verwenden, damit from/to NICHT angehängt werden.
+  const url = `/chronicle/weekly-top3-all?${qs.toString()}`;
+
   try {
-    const res = await fetch(withTime("/chronicle/weekly-top3-all", qs.toString()), { cache: "no-store" });
+    const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) {
       body.innerHTML = `<div class="empty-state">Fehler beim Laden (${res.status}).</div>`;
       return;
@@ -1625,14 +2136,14 @@ async function loadWeeklyChronicle() {
     }
 
     body.innerHTML = data.map(w => `
-      <details class="chronicle-accordion">
+      <details class="chronicle-accordion" open>
         <summary><strong>${w.week_label}</strong> (${w.start_date} – ${w.end_date})</summary>
-        <div class="chronicle-combos" style="display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));margin-top:10px">
+        <div class="chronicle-combos" style="display:grid;grid-template-columns:1fr;gap:8px;margin-top:6px">
           <div class="chronicle-combo">
             <h4 style="margin:.2rem 0 .4rem 0">Top 3 (Einzel)</h4>
             <div>
               ${(w.top1||[]).map((t,i)=>`
-                <button class="linklike" data-kw="${t.word}">#${i+1} ${t.word} (${t.count})</button>
+                <button class="linklike" data-kw="${t.word}">${t.word} (${t.count})</button>
               `).join(" · ") || "—"}
             </div>
           </div>
@@ -1640,7 +2151,7 @@ async function loadWeeklyChronicle() {
             <h4 style="margin:.2rem 0 .4rem 0">Top 3 (2er-Kombis)</h4>
             <div>
               ${(w.top2||[]).map((t,i)=>`
-                <button class="linklike" data-kw="${t.word}">#${i+1} ${t.word} (${t.count})</button>
+                <button class="linklike" data-kw="${t.word}">${t.word} (${t.count})</button>
               `).join(" · ") || "—"}
             </div>
           </div>
@@ -1648,7 +2159,7 @@ async function loadWeeklyChronicle() {
             <h4 style="margin:.2rem 0 .4rem 0">Top 3 (3er-Kombis)</h4>
             <div>
               ${(w.top3||[]).map((t,i)=>`
-                <button class="linklike" data-kw="${t.word}">#${i+1} ${t.word} (${t.count})</button>
+                <button class="linklike" data-kw="${t.word}">${t.word} (${t.count})</button>
               `).join(" · ") || "—"}
             </div>
           </div>
@@ -1656,14 +2167,9 @@ async function loadWeeklyChronicle() {
       </details>
     `).join("");
 
-    // Keyword-Klicks → Suche/Drilldown
     body.querySelectorAll('button[data-kw]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const kw = btn.getAttribute('data-kw');
-        searchByKeyword(kw);
-      });
+      btn.addEventListener('click', () => searchByKeyword(btn.getAttribute('data-kw')));
     });
-
   } catch (err) {
     console.error(err);
     body.innerHTML = `<div class="empty-state">Unbekannter Fehler beim Laden.</div>`;
@@ -1671,16 +2177,18 @@ async function loadWeeklyChronicle() {
 }
 
 
-
-
 async function loadBlindspotFeed() {
   const qs = new URLSearchParams({
-    min_sources: String(BLINDSPOT_UI.min_sources),           // NEU
-    min_total: String(BLINDSPOT_UI.min_total),               // jetzt dynamisch
-    ratio_max: String(BLINDSPOT_UI.ratio_max),               // Dezimal (z.B. 0.05)
-    ngram: String(FILTERS.ngram ?? 1)
+    min_sources_min: String(BLINDSPOT_UI.min_sources_range?.[0] ?? 1),
+    min_sources_max: String(BLINDSPOT_UI.min_sources_range?.[1] ?? 50),
+    min_total_min:   String(BLINDSPOT_UI.min_total_range?.[0]   ?? 1),
+    min_total_max:   String(BLINDSPOT_UI.min_total_range?.[1]   ?? 50),
+    ratio_min:       String(BLINDSPOT_UI.ratio_range?.[0]       ?? 0.01), // Dezimal
+    ratio_max:       String(BLINDSPOT_UI.ratio_range?.[1]       ?? 0.05), // Dezimal
+    ngram:           String(FILTERS.ngram ?? 1)
   });
   if (FILTERS.teaser) qs.set("teaser", "true");
+  appendCountries(qs);
   const url = withTime("/blindspots/keywords-feed", qs.toString());
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) return;
@@ -1691,13 +2199,13 @@ async function loadBlindspotFeed() {
 
 function renderBlindspotFeed(data) {
   const cfg = [
-    { key: "systemkritisch",  el: "#feedKritisch",  label: "systemkritisch",  ratioKey: "kritisch" },
-    { key: "systemnah",       el: "#feedNah",       label: "systemnah",       ratioKey: "nah" },
-    { key: "nationalistisch", el: "#feedNational",  label: "nationalistisch", ratioKey: "national" },
-    { key: "globalistisch",   el: "#feedGlobal",    label: "globalistisch",   ratioKey: "global" },
+    { key: "systemkritisch",  el: "#feedKritisch",  ratioKey: "kritisch" },
+    { key: "systemnah",       el: "#feedNah",       ratioKey: "nah" },
+    { key: "nationalistisch", el: "#feedNational",  ratioKey: "national" },
+    { key: "globalistisch",   el: "#feedGlobal",    ratioKey: "global" },
   ];
 
-  for (const { key, el, label, ratioKey } of cfg) {
+  for (const { key, el, ratioKey } of cfg) {
     const col = document.querySelector(`${el} ul`);
     if (!col) continue;
     col.innerHTML = "";
@@ -1715,83 +2223,180 @@ function renderBlindspotFeed(data) {
       const li = document.createElement("li");
       li.className = "feed-item";
 
-      const btn = document.createElement("button");
-      btn.className = "linklike";
-      btn.textContent = it.word;
-      btn.onclick = () => searchByKeyword(it.word);
+      // links: Titel + Meta
+      const left = document.createElement("div");
+      left.className = "blindspot-item-left";
 
-      const badge = document.createElement("span");
-      badge.className = "blindspot-badge";
+      const titleBtn = document.createElement("button");
+      titleBtn.className = "linklike blindspot-item-title";
+      titleBtn.textContent = it.word;
+      titleBtn.onclick = () => searchByKeyword(it.word);
+
+      const meta = document.createElement("div");
+      meta.className = "blindspot-item-meta";
+      meta.textContent = `(${it.total} Erwähnungen, ${it.sources} Quellen)`;
+
+      left.appendChild(titleBtn);
+      left.appendChild(meta);
+
+      // rechts: schwarze Chip-Badge
+      const chip = document.createElement("div");
+      chip.className = "ratio-chip";
       const ratio = Number(it.ratios?.[ratioKey]) || 0;
       const pct   = Math.round(ratio * 100);
       const zero  = it.zero_badge?.[ratioKey] === true;
-      badge.textContent = zero ? `0 % ${label}` : `≤ ${pct}% ${label}`;
+      chip.textContent = zero ? "0" : `≤ ${pct}%`;
 
-      const meta = document.createElement("span");
-      meta.className = "meta";
-      meta.textContent = `(${it.total} Erwähnungen, ${it.sources} Quellen)`;
-
-      li.appendChild(btn);
-      li.appendChild(badge);
-      li.appendChild(meta);
+      li.appendChild(left);
+      li.appendChild(chip);
       col.appendChild(li);
     }
   }
 }
 
+
 function initBlindspotControls(){
-  const elMinSources = document.getElementById('bsMinSources');
-  const elMinSourcesVal = document.getElementById('bsMinSourcesVal');
-  const elMinTotal = document.getElementById('bsMinTotal');
-  const elMinTotalVal = document.getElementById('bsMinTotalVal');
-  const elRatio = document.getElementById('bsRatio');
-  const elRatioVal = document.getElementById('bsRatioVal');
+  // Quellen
+  const elSrcMin = document.getElementById('bsMinSourcesMin');
+  const elSrcMax = document.getElementById('bsMinSourcesMax');
+  const elSrcVal = document.getElementById('bsMinSourcesVal');
 
-  // Initial anzeigen
-  elMinSourcesVal.textContent = String(BLINDSPOT_UI.min_sources);
-  elMinTotalVal.textContent = String(BLINDSPOT_UI.min_total);
-  elRatioVal.textContent = `${Math.round(BLINDSPOT_UI.ratio_max*100)}%`;
-  updateBlindspotInfo();
+  // Erwähnungen
+  const elTotMin = document.getElementById('bsMinTotalMin');
+  const elTotMax = document.getElementById('bsMinTotalMax');
+  const elTotVal = document.getElementById('bsMinTotalVal');
 
-  // Events
-  elMinSources.addEventListener('input', () => {
-    BLINDSPOT_UI.min_sources = parseInt(elMinSources.value, 10);
-    elMinSourcesVal.textContent = String(BLINDSPOT_UI.min_sources);
-    updateBlindspotInfo();
-  });
-  elMinTotal.addEventListener('input', () => {
-    BLINDSPOT_UI.min_total = parseInt(elMinTotal.value, 10);
-    elMinTotalVal.textContent = String(BLINDSPOT_UI.min_total);
-    updateBlindspotInfo();
-  });
-  elRatio.addEventListener('input', () => {
-    const pct = parseInt(elRatio.value, 10);
-    BLINDSPOT_UI.ratio_max = pct / 100;
-    elRatioVal.textContent = `${pct}%`;
-    updateBlindspotInfo();
-  });
+  // Ratio (in Prozent am Slider; im State in Dezimal)
+  const elRatMin = document.getElementById('bsRatioMin');
+  const elRatMax = document.getElementById('bsRatioMax');
+  const elRatVal = document.getElementById('bsRatioVal');
 
-  // Beim Loslassen neu laden (nicht bei jedem Pixel)
+  function clampPair(aEl, bEl){
+    let a = parseInt(aEl.value,10), b = parseInt(bEl.value,10);
+    if (a > b) [a, b] = [b, a];
+    aEl.value = String(a); bEl.value = String(b);
+    return [a, b];
+  }
+
+  function syncSources(){
+    const [a,b] = clampPair(elSrcMin, elSrcMax);
+    BLINDSPOT_UI.min_sources_range = [a,b];
+    elSrcVal.textContent = `${a} – ${b}`;
+    updateBlindspotInfo();
+  }
+  function syncTotals(){
+    const [a,b] = clampPair(elTotMin, elTotMax);
+    BLINDSPOT_UI.min_total_range = [a,b];
+    elTotVal.textContent = `${a} – ${b}`;
+    updateBlindspotInfo();
+  }
+  function syncRatios(){
+    const [a,b] = clampPair(elRatMin, elRatMax);
+    // im State als Dezimalzahlen (0–1)
+    BLINDSPOT_UI.ratio_range = [a/100, b/100];
+    elRatVal.textContent = `${a}% – ${b}%`;
+    updateBlindspotInfo();
+  }
+
+  // Initial
+  syncSources(); syncTotals(); syncRatios();
+
+  // Live-Update bei Input …
+  [elSrcMin, elSrcMax].forEach(el => el.addEventListener('input', syncSources));
+  [elTotMin, elTotMax].forEach(el => el.addEventListener('input', syncTotals));
+  [elRatMin, elRatMax].forEach(el => el.addEventListener('input', syncRatios));
+
+  // … und Laden beim Loslassen
   ['change','mouseup','touchend'].forEach(evt => {
-    elMinSources.addEventListener(evt, loadBlindspotFeed);
-    elMinTotal.addEventListener(evt, loadBlindspotFeed);
-    elRatio.addEventListener(evt, loadBlindspotFeed);
+    [elSrcMin, elSrcMax, elTotMin, elTotMax, elRatMin, elRatMax]
+      .forEach(el => el.addEventListener(evt, loadBlindspotFeed));
   });
 }
+
+// malt den "einzigen" Track als Farbverlauf auf das obere (max-)Input
+function bindDualRange(minId, maxId, displayId, {min, max, suffix = ''}, onCommit) {
+  const a = document.getElementById(minId);
+  const b = document.getElementById(maxId);
+  const out = document.getElementById(displayId);
+  const wrap = a.closest('.dual-lite') || b.closest('.dual-lite');
+
+  const pct = v => (v - min) / (max - min);
+
+  function sync(commit=false){
+    let v1 = +a.value, v2 = +b.value;
+    if (v1 > v2) [v1, v2] = [v2, v1];
+    a.value = v1; b.value = v2;
+
+    // Pixelgenaue Progress-Position: Track = wrapperBreite - ThumbBreite
+    const wrapW = wrap.clientWidth;
+    const thumbW = parseFloat(getComputedStyle(wrap).getPropertyValue('--thumb')) || 16;
+    const trackW = Math.max(0, wrapW - thumbW);
+    const leftPx = (thumbW / 2) + pct(v1) * trackW;
+    const rightPx = (thumbW / 2) + pct(v2) * trackW;
+
+    wrap.style.setProperty('--start-px', `${leftPx}px`);
+    wrap.style.setProperty('--end-px', `${rightPx}px`);
+
+    out.textContent = `${v1}${suffix} – ${v2}${suffix}`;
+    if (commit && typeof onCommit === 'function') onCommit(v1, v2);
+  }
+
+  a.addEventListener('input', () => sync(false));
+  b.addEventListener('input', () => sync(false));
+  ['change','mouseup','touchend'].forEach(ev => {
+    a.addEventListener(ev, () => sync(true));
+    b.addEventListener(ev, () => sync(true));
+  });
+
+  // bei Resize neu berechnen (responsive)
+  window.addEventListener('resize', () => sync(false));
+
+  sync();
+}
+
+
+// Initialisieren (einmal nach DOM-Load)
+window.addEventListener('load', () => {
+  bindDualRange('bsMinSourcesMin','bsMinSourcesMax','bsMinSourcesVal',
+    {min:1, max:50}, () => {           // Commit → State updaten + Feed neu
+      const lo = +bsMinSourcesMin.value, hi = +bsMinSourcesMax.value;
+      BLINDSPOT_UI.min_sources_range = [Math.min(lo,hi), Math.max(lo,hi)];
+      updateBlindspotInfo(); loadBlindspotFeed();
+    });
+
+  bindDualRange('bsMinTotalMin','bsMinTotalMax','bsMinTotalVal',
+    {min:1, max:50}, () => {
+      const lo = +bsMinTotalMin.value, hi = +bsMinTotalMax.value;
+      BLINDSPOT_UI.min_total_range = [Math.min(lo,hi), Math.max(lo,hi)];
+      updateBlindspotInfo(); loadBlindspotFeed();
+    });
+
+  bindDualRange('bsRatioMin','bsRatioMax','bsRatioVal',
+    {min:0, max:100, suffix:'%'}, () => {
+      const lo = +bsRatioMin.value, hi = +bsRatioMax.value;
+      BLINDSPOT_UI.ratio_range = [Math.min(lo,hi)/100, Math.max(lo,hi)/100]; // Dezimal
+      updateBlindspotInfo(); loadBlindspotFeed();
+    });
+});
+
+
 
 window.addEventListener('load', initBlindspotControls);
 
 function updateBlindspotInfo() {
   const info = document.getElementById('blindspotInfo');
   if (!info) return;
-  const txt = `Keywords mit mindestens ${BLINDSPOT_UI.min_sources} Quellen, ${BLINDSPOT_UI.min_total} Erwähnungen und ≤ ${Math.round(BLINDSPOT_UI.ratio_max*100)} % Berichterstattung auf der jeweiligen Achse.`;
-  info.textContent = txt;
+  const [s1,s2] = BLINDSPOT_UI.min_sources_range || [2,10];
+  const [t1,t2] = BLINDSPOT_UI.min_total_range   || [10,20];
+  const [r1,r2] = BLINDSPOT_UI.ratio_range       || [0.01,0.05];
+  info.textContent = `Keywords mit ${s1}–${s2} Quellen, ${t1}–${t2} Erwähnungen und einem Blindspot-Wert zwischen ${Math.round(r1*100)} % und ${Math.round(r2*100)} %.`;
 }
 
 
   async function loadFilteredMediaCompass() {
     const qs = new URLSearchParams();
     appendSources(qs);
+    appendCountries(qs);
     if (FILTERS.keyword) qs.set("keyword", FILTERS.keyword);
     if (FILTERS.teaser)  qs.set("teaser", "true");
     const key = qs.toString();
@@ -1808,6 +2413,7 @@ function updateBlindspotInfo() {
     document.getElementById("sourceSelect").addEventListener("change", (e) => {
       filters.source = e.target.value;
       loadFilteredArticles();
+      loadKeywordTrends();
       loadExtremeBubbles();
       loadTopAbsoluteKeywords();
       loadFilteredMediaCompass();
@@ -1959,6 +2565,19 @@ function renderActiveFilterChips(){
     });
   }
 
+  if (ACTIVE_COUNTRIES.size > 0) {
+    for (const c of Array.from(ACTIVE_COUNTRIES).sort()) {
+      mk(`🌍 ${c}`, () => {
+        ACTIVE_COUNTRIES.delete(c);
+        updateCountryBtnLabel();
+        updateURLFromFilters(false);
+        applyFilters();
+      });
+    }
+  } else {
+    mk('🌍 Alle Länder', null, { removable:false, ghost:true });
+  }
+
 
   // Alle löschen (schneller Reset)
   const dPreset = presetDaysFromRange();
@@ -2016,6 +2635,7 @@ document.addEventListener('click', (e) => {
 }, true);
 
 function onPresetDaysClick(days){
+  USER_TIME_OVERRIDE = true;  // ← Nutzer hat aktiv einen Zeitraum gewählt
   const endEx = nowExclusive(); // JETZT (exklusiv)
   const start = startOfDay(new Date(endEx.getTime() - days*86400000));
 
@@ -2178,6 +2798,9 @@ window.addEventListener('load', () => {
   document.addEventListener('click', (e) => {
     const rm = e.target.closest('#date-range-badge .remove');
     if (!rm) return;
+
+    USER_TIME_OVERRIDE = false;  // ← zurück auf Default-5-Wochen-Logik
+
     const endEx = nowExclusive();
     FILTERS.from = toLocalIsoWithTZ(startOfDay(new Date(endEx.getTime() - 6*86400000)));
     FILTERS.to   = toLocalIsoWithTZ(endEx);
@@ -2362,6 +2985,7 @@ document.addEventListener('click', (e) => {
 
     if (toEx <= f) { alert("Ende muss nach Start liegen."); return; }
 
+    USER_TIME_OVERRIDE = true;   // ← Nutzer hat aktiv gesetzt
     FILTERS.from = toLocalIsoWithTZ(f);
     FILTERS.to   = toLocalIsoWithTZ(toEx);
 
@@ -2374,6 +2998,7 @@ document.addEventListener('click', (e) => {
     applyFilters();
     closeCustomRangeModal();
   }
+
 
 }, true);
 

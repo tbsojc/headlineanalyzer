@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.models import get_articles
 
 # Feeds einlesen (liefert Artikelobjekte; Speicherung jetzt via Repository)
-from app.core.feeds import fetch_articles, fetch_articles_from_source
+from app.core.feeds import fetch_articles, fetch_articles_from_source, EXCLUDED_WORDS
 
 # ORM/Repository – zentrale DB-Zugriffe
 from app.database import get_db
@@ -55,6 +55,8 @@ def _time_window_or_400(hours: int | None, from_: str | None, to: str | None):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+def filter_words(words):
+    return [w for w in words if w.lower() not in EXCLUDED_WORDS]
 
 
 def _select_articles(
@@ -105,6 +107,31 @@ def get_topics():
     return sorted(topics.items(), key=lambda x: x[1], reverse=True)
 
 
+# === Länder-Helfer ============================================================
+
+@lru_cache(maxsize=1)
+def country_map() -> dict[str, str]:
+    """
+    Mappt normierte Mediennamen -> Ländercode (z.B. "zeit" -> "DE").
+    Falls die CSV-Spalte 'Land' fehlt, wird 'UN' (unknown) gesetzt.
+    """
+    df = load_media_df()
+    col = "Land" if "Land" in df.columns else None
+    if not col:
+        df["Land"] = "UN"
+    return dict(zip(df["norm_name"], df["Land"].fillna("UN").astype(str).str.strip().str.upper()))
+
+@lru_cache(maxsize=1)
+def available_countries() -> list[str]:
+    df = load_media_df()
+    if "Land" not in df.columns:
+        return []
+    vals = df["Land"].dropna().astype(str).str.strip().str.upper().unique().tolist()
+    vals.sort()
+    return vals
+
+
+
 # -----------------------------
 # Medienkompass (CSV)
 # -----------------------------
@@ -142,6 +169,7 @@ def media_positions(request: Request):
 def media_positions_by_keyword(
     word: str,
     hours: int = Query(72),
+    country: list[str] | None = Query(None),
     source: Optional[str] = Query(None),
     teaser: bool = Query(False),
     from_: str | None = Query(None, alias="from"),   # NEU
@@ -157,6 +185,8 @@ def media_positions_by_keyword(
     )
 
     articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
+
+    articles = filter_articles_by_countries(articles, country)
 
     # optional Quelle filtern
     if source:
@@ -315,6 +345,7 @@ def fetch_source(source: str = Query(...), db: Session = Depends(get_db)):
 @router.get("/articles/filtered", response_model=list[ArticleSchema])
 def filtered_articles(
     hours: int = Query(72),
+    country: list[str] | None = Query(None),
     source: list[str] | None = Query(None),   # ← Liste statt str
     keyword: str | None = Query(None),
     teaser: bool = Query(False),
@@ -330,6 +361,8 @@ def filtered_articles(
         unbounded=True, order="desc", request=request
     )
     articles = arts
+
+    articles = filter_articles_by_countries(articles, country)
 
     # Quellen-Filter (Mehrfach): akzeptiert mehrere ?source=… Vorkommen
     if source:
@@ -369,6 +402,7 @@ def filtered_articles(
 @router.get("/media-positions/filtered")
 def media_positions_filtered(
     hours: int = Query(72),
+    country: list[str] | None = Query(None),
     source: list[str] | None = Query(None),   # Mehrfachquellen
     keyword: str = Query(None),
     teaser: bool = Query(False),
@@ -382,6 +416,8 @@ def media_positions_filtered(
     # Zeitfenster + Artikel holen
     tw = _time_window_or_400(hours, from_, to)
     articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
+
+    articles = filter_articles_by_countries(articles, country)
 
     # Quellenfilter (Mehrfach)
     if source:
@@ -426,42 +462,205 @@ def media_positions_filtered(
 # Keyword-Analysen (alle via Repository/Session)
 # -----------------------------
 @router.get("/keywords/trending")
-def keyword_trends(db: Session = Depends(get_db)):
+def keyword_trends(
+    hours: int = Query(72),
+    country: list[str] | None = Query(None),
+    source: list[str] | None = Query(None),
+    ngram: int = Query(1, ge=1, le=3),
+    teaser: bool = Query(False),
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
+    db: Session = Depends(get_db),
+    request: Request = None,
+):
+    """
+    Dynamische Keyword-Trends:
+    - Basis ist das Ende des gewählten Zeitfensters (Date-Range oder 'jetzt')
+    - Für jede Stufe (24h, 72h, 7d, 30d):
+        * aktueller Zeitraum vs. vorheriger gleicher Zeitraum
+        * Filter: country, source, ngram, teaser
+    - Aufsteiger: starke relative Zunahme
+    - Absteiger: einfach die stärksten Verluste (Delta am negativsten)
+    """
     from collections import Counter
+    from itertools import combinations
+    from datetime import datetime, timedelta, timezone
     from app.core.clean_utils import extract_relevant_words
 
-    timeframes = {"24h": 24, "72h": 72, "7d": 168, "30d": 720}
-    result = {}
+    # 1) Zeitfenster bestimmen
+    tw = _time_window_or_400(hours, from_, to)
 
-    for label, hours in timeframes.items():
+    # base_to: immer ein UTC-aware datetime
+    if tw["mode"] == "range":
+        base_to = ensure_utc(tw["to"])
+    else:
+        # Stundenmodus -> "jetzt" in UTC
+        base_to = datetime.now(timezone.utc).replace(microsecond=0)
+
+    # Sicherheit: base_to auf UTC normalisieren
+    if base_to.tzinfo is None:
+        base_to = base_to.replace(tzinfo=timezone.utc)
+    else:
+        base_to = base_to.astimezone(timezone.utc)
+
+    timeframes = {
+        "24h": 24,
+        "72h": 72,
+        "7d": 24 * 7,
+        "30d": 24 * 30,
+    }
+
+    def norm_source(x: str | None) -> str:
+        return (x or "").strip().lower()
+
+    # Einheiten (1er/2er/3er-Kombis) pro Artikel
+    def units_from_article(a):
+        tokens = set(extract_relevant_words(a.title or ""))
+        if teaser and getattr(a, "teaser", None):
+            tokens |= set(extract_relevant_words(a.teaser or ""))
+        toks = sorted(tokens)
+        if not toks:
+            return set()
+        if ngram == 1:
+            return set(toks)
+        return {" + ".join(c) for c in combinations(toks, ngram)}
+
+    # Hilfssfunktion: beliebiges datetime nach UTC normalisieren
+    def to_utc(dt_raw):
+        if not isinstance(dt_raw, datetime):
+            return None
+        if dt_raw.tzinfo is None:
+            return dt_raw.replace(tzinfo=timezone.utc)
+        return dt_raw.astimezone(timezone.utc)
+
+    result: dict[str, dict[str, list[dict]]] = {}
+
+    for label, h in timeframes.items():
+        # 2h-Fenster (vorher + aktuell) in einem Rutsch holen
+        window_end = base_to
+        window_start = base_to - timedelta(hours=h * 2)
+
+        articles, start, end, mode, bucket = _select_articles(
+            db,
+            hours=None,
+            from_=window_start.isoformat(),
+            to=window_end.isoformat(),
+            unbounded=True,
+            order="asc",
+            request=request,
+        )
+
+        # Länderfilter
+        articles = filter_articles_by_countries(articles, country)
+
+        # Quellenfilter (Mehrfachauswahl, UI-Label ODER norm_name)
+        if source:
+            # Rohwerte aus der Query
+            raw = {(s or "").strip().lower() for s in source if s and s.strip()}
+            if raw:
+                # Mapping aus Medienkompass laden
+                df = load_media_df()
+                label2norm = dict(zip(
+                    df["Medium"].str.strip().str.lower(),
+                    df["norm_name"]          # normierter Name in der CSV/DB
+                ))
+
+                # Ziel-Menge: erlaubte normierte Namen
+                wanted = set()
+                for s in raw:
+                    wanted.add(label2norm.get(s, s))  # Label -> norm_name, sonst roh
+
+                articles = [
+                    a for a in articles
+                    if norm_source(getattr(a, "source", None)) in wanted
+                ]
+
+
         now_words = Counter()
         past_words = Counter()
 
-        # Aktueller Zeitraum
-        now_articles = get_articles_last_hours(db, hours)
-        for a in now_articles:
-            now_words.update(extract_relevant_words(a.title))
+        cutoff = base_to - timedelta(hours=h)
+        # cutoff ebenfalls explizit UTC
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=timezone.utc)
+        else:
+            cutoff = cutoff.astimezone(timezone.utc)
 
-        # Vergleichszeitraum (davor)
-        past_articles = get_articles_last_hours(db, hours * 2)
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-        for a in past_articles:
-            if a.published_at < cutoff:
-                past_words.update(extract_relevant_words(a.title))
+        for a in articles:
+            dt = getattr(a, "published_at", None) or getattr(a, "created_at", None)
+            dt = to_utc(dt)
+            if not dt:
+                continue
 
-        # Veränderung berechnen
+            units = units_from_article(a)
+            if not units:
+                continue
+
+            if dt < cutoff:
+                past_words.update(units)
+            else:
+                now_words.update(units)
+
+        # Wenn nichts da ist, leere Listen liefern
+        if not now_words and not past_words:
+            result[label] = {"top": [], "flop": []}
+            continue
+
+        # Veränderungen berechnen
         changes = []
-        for word in now_words:
-            delta = now_words[word] - past_words.get(word, 0)
-            rel_change = delta / max(1, past_words.get(word, 1))
-            changes.append((word, delta, rel_change))
+        all_terms = set(now_words.keys()) | set(past_words.keys())
+        for term in all_terms:
+            now_c = now_words.get(term, 0)
+            prev_c = past_words.get(term, 0)
+            if now_c == 0 and prev_c == 0:
+                continue
+            delta = now_c - prev_c
+            if prev_c > 0:
+                rel_change = delta / prev_c
+            else:
+                # neu aufgetaucht
+                rel_change = float("inf") if now_c > 0 else 0.0
+            changes.append((term, delta, rel_change, now_c, prev_c))
 
-        top = sorted(changes, key=lambda x: x[2], reverse=True)[:5]
-        flop = sorted(changes, key=lambda x: x[2])[:5]
+        # Aufsteiger: wie vorher (rel. Veränderung, dann absolute Häufigkeit)
+        changes_sorted_top = sorted(
+            changes,
+            key=lambda x: (x[2], x[3]),  # rel_change, dann now_c
+            reverse=True,
+        )
+        top = changes_sorted_top[:5]
+
+        # Absteiger: ganz simpel – stärkster Verlust (Delta am negativsten)
+        changes_sorted_flop = sorted(
+            changes,
+            key=lambda x: x[1],  # Delta
+        )
+        flop = [c for c in changes_sorted_flop if c[1] < 0][:5]
+
+        def serialize(entries):
+            out = []
+            for w, delta, rel_change, now_c, prev_c in entries:
+                # relative Änderung in Prozent; "neu" wenn kein Vorwert
+                if prev_c == 0 or rel_change in (float("inf"), float("-inf")):
+                    pct = None   # Frontend zeigt "neu"
+                else:
+                    pct = round(rel_change * 100.0, 2)
+
+                out.append(
+                    {
+                        "word": w,
+                        "delta": int(delta),
+                        "change_pct": pct,   # ⬅ wichtig: Feldname
+                        "now": int(now_c),
+                        "prev": int(prev_c),
+                    }
+                )
+            return out
+
 
         result[label] = {
-            "top": [{"word": w, "delta": d, "change": round(r, 2)} for w, d, r in top],
-            "flop": [{"word": w, "delta": d, "change": round(r, 2)} for w, d, r in flop],
+            "top": serialize(top),
+            "flop": serialize(flop),
         }
 
     return result
@@ -470,6 +669,7 @@ def keyword_trends(db: Session = Depends(get_db)):
 @router.get("/keywords/extreme-bubble")
 def extreme_keywords(
     hours: int = 72,
+    country: list[str] | None = Query(None),
     from_: str | None = Query(None, alias="from"),   # NEU
     to: str | None = Query(None),                     # NEU
     db: Session = Depends(get_db),
@@ -482,6 +682,8 @@ def extreme_keywords(
         int((tw["to"] - tw["from"]).total_seconds() // 3600), 1
     )
     articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
+
+    articles = filter_articles_by_countries(articles, country)
 
     # Medienkompass laden
     df = load_media_df()
@@ -522,6 +724,7 @@ def extreme_keywords(
 @router.get("/keywords/bias-score")
 def keyword_bias_scores(
     hours: int = 72,
+    country: list[str] | None = Query(None),
     from_: str | None = Query(None, alias="from"),   # NEU
     to: str | None = Query(None),                     # NEU
     db: Session = Depends(get_db),
@@ -534,6 +737,8 @@ def keyword_bias_scores(
         int((tw["to"] - tw["from"]).total_seconds() // 3600), 1
     )
     articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
+
+    articles = filter_articles_by_countries(articles, country)
 
     df = load_media_df()
     media_bias = dict(zip(df["norm_name"], df["Systemnähe (X)"]))
@@ -561,6 +766,7 @@ def keyword_bias_scores(
 @router.get("/keywords/bias-vector")
 def keyword_bias_vector(
     hours: int = 72,
+    country: list[str] | None = Query(None),
     from_: str | None = Query(None, alias="from"),   # NEU
     to: str | None = Query(None),                     # NEU
     db: Session = Depends(get_db),
@@ -581,6 +787,9 @@ def keyword_bias_vector(
         int((tw["to"] - tw["from"]).total_seconds() // 3600), 1
     )
     articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
+
+    articles = filter_articles_by_countries(articles, country)
+
     keyword_coords = defaultdict(list)
 
     for a in articles:
@@ -605,6 +814,7 @@ def keyword_bias_vector(
 @router.get("/keywords/timeline")
 def keyword_timeline(
     word: str,
+    country: list[str] | None = Query(None),
     from_: str | None = Query(None, alias="from"),
     to: str | None = Query(None),
     teaser: bool = Query(False),
@@ -657,6 +867,9 @@ def keyword_timeline(
                 unbounded=True,
                 order="asc",
             )
+
+            articles = filter_articles_by_countries(articles, country)
+
         except Exception as e:
             tb = traceback.format_exc()
             print(tb)
@@ -734,74 +947,133 @@ def keyword_timeline(
 
 
 
-
 @router.get("/keywords/top-absolute")
 def keywords_top_absolute(
     hours: int = Query(72),
+    country: list[str] | None = Query(None),
     ngram: int = Query(1, ge=1, le=3),
     teaser: bool = Query(False),
     compare_prev: bool = Query(False),
     from_: str | None = Query(None, alias="from"),
     to: str | None = Query(None),
-    source: list[str] | None = Query(None),   # <-- neu: Quellen aus Query übernehmen
+    source: list[str] | None = Query(None),
+    top_n: int = Query(25, ge=1, le=200),
+    spark_days: int = Query(0, ge=0, le=30),   # ← NEU: 0 = aus, 7 = letzte 7 Tage
     db: Session = Depends(get_db),
-    request: Request = None,                  # <-- kein Union-Typ!
+    request: Request = None,
 ):
-    from collections import Counter
+    from collections import Counter, defaultdict
     from itertools import combinations
+    from datetime import timedelta
     from app.core.clean_utils import extract_relevant_words
 
-    # Aktuelles Fenster laden (ohne source-Arg) und ggf. filtern
+    # 1) Zeitfenster & Artikel (wie gehabt)
     articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
+    articles = filter_articles_by_countries(articles, country)
+
+    # Quelle(n) filtern
+    source_set = None
     if source:
-        source_set = set(source)
-        articles = [a for a in articles if getattr(a, "source", None) in source_set]
+      source_set = { (s or "").strip().lower() for s in source }
+      def norm(x): return (x or "").strip().lower()
+      articles = [a for a in articles if norm(getattr(a, "source", None)) in source_set]
 
+    # Ngram-Units je Artikel
     def units_from_article(a):
-        tokens = set(extract_relevant_words(a.title))
-        if teaser and getattr(a, "teaser", None):
-            tokens |= set(extract_relevant_words(a.teaser))
-        toks = sorted(tokens)
-        if ngram == 1:
-            return set(toks)
-        return {" + ".join(c) for c in combinations(toks, ngram)}
+      tokens = set(extract_relevant_words(a.title or ""))
+      if teaser and getattr(a, "teaser", None):
+        tokens |= set(extract_relevant_words(a.teaser or ""))
+      toks = sorted(tokens)
+      if ngram == 1:
+        return set(toks)
+      return {" + ".join(c) for c in combinations(toks, ngram)}
 
+    # 2) Zählen: aktuelle und (optional) vorige Periode
     now_words = Counter()
-    past_words = Counter()
-
-    # Aktuelle Periode zählen
     for a in articles:
-        now_words.update(units_from_article(a))
+      now_words.update(units_from_article(a))
 
-    # Vorperiode (optional): gleiche Länge direkt vor [start, end)
+    past_words = Counter()
     if compare_prev:
-        p_start, p_end = previous_window(start, end)
-        prev = get_articles_between(db, p_start, p_end)  # kein source-Arg
-        if source:
-            source_set = set(source)
-            prev = [a for a in prev if getattr(a, "source", None) in source_set]
-        for a in prev:
-            past_words.update(units_from_article(a))
+      p_start, p_end = previous_window(start, end)
+      prev_articles = get_articles_between(db, p_start, p_end)
+      if source_set:
+        prev_articles = [
+          a for a in prev_articles
+          if ((getattr(a, "source", "") or "").strip().lower() in source_set)
+        ]
+      for a in prev_articles:
+        past_words.update(units_from_article(a))
 
-    # Ausgabe (Top 30)
+    # 3) Ränge
+    rank_current = {term: i+1 for i, (term, _) in enumerate(now_words.most_common())}
+    rank_prev    = {term: i+1 for i, (term, _) in enumerate(past_words.most_common())}
+
+    # 4) Top N Ergebnis (ohne Spark)
+    top_terms = [term for term, _ in now_words.most_common(top_n)]
     result = []
-    for term, current_count in now_words.most_common(30):
-        prev_count = past_words.get(term, 0)
-        delta = current_count - prev_count
-        change_pct = (delta / prev_count * 100.0) if prev_count > 0 else 0.0
-        result.append({
-            "word": term,
-            "current": current_count,
-            "previous": prev_count,
-            "delta": delta,
-            "change_pct": round(change_pct, 2),
-        })
+    for term in top_terms:
+      current_count = now_words.get(term, 0)
+      prev_count = past_words.get(term, 0)
+      delta = current_count - prev_count
+      change_pct = (delta / prev_count * 100.0) if prev_count > 0 else (100.0 if current_count>0 and prev_count==0 else 0.0)
+      result.append({
+        "word": term,
+        "current": int(current_count),
+        "previous": int(prev_count),
+        "delta": int(delta),
+        "change_pct": round(change_pct, 2),
+        "rank_current": rank_current.get(term),
+        "rank_prev":    rank_prev.get(term),
+      })
+
+    # 5) Optional: 7-Tage Sparkline für die Top-Begriffe
+    if spark_days and top_terms:
+      # Fenster: letzte spark_days bis zum aktuellen 'end'
+      spark_end = end
+      spark_start = (spark_end - timedelta(days=spark_days)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+      )
+      spark_articles = get_articles_between(db, spark_start, spark_end)
+      if country:
+        spark_articles = filter_articles_by_countries(spark_articles, country)
+      if source_set:
+        spark_articles = [
+          a for a in spark_articles
+          if ((getattr(a, "source", "") or "").strip().lower() in source_set)
+        ]
+
+      # Tag-Index vorbereiten
+      day_index = lambda dt: (dt.date() - spark_start.date()).days
+      series = {t: [0]*spark_days for t in top_terms}
+
+      for a in spark_articles:
+        try:
+          idx = day_index(getattr(a, "published_at"))
+        except Exception:
+          continue
+        if not (0 <= idx < spark_days):
+          continue
+        units = units_from_article(a)
+        # Nur Top-Begriffe zählen
+        for u in units:
+          if u in series:
+            series[u][idx] += 1
+
+      # In Ergebnis mappen
+      lookup = {row["word"]: row for row in result}
+      for term, vals in series.items():
+        # Sicherheit: immer Länge spark_days liefern
+        lookup[term]["spark"] = list(vals)
+
     return result
+
 
 
 @router.get("/headlines/words")
 def headlines_words(
     hours: int = Query(72),
+    country: list[str] | None = Query(None),
     source: list[str] | None = Query(None),    # ← Liste statt str
     keyword: str | None = Query(None),
     teaser: bool = Query(False),
@@ -821,6 +1093,7 @@ def headlines_words(
     )
 
     arts, start, end, mode, bucket = _select_articles(db, hours, from_, to, unbounded=True, order="asc", request=request)
+    arts = filter_articles_by_countries(arts, country)
     # ... Rest unverändert ...
     articles = arts
 
@@ -983,12 +1256,16 @@ def keyword_sides(
 @router.get("/blindspots/keywords-feed")
 def blindspot_keywords_feed(
     hours: int = Query(72),
-    min_total: int = Query(10),
-    ratio_max: float = Query(0.05),
+    country: list[str] | None = Query(None),
+    min_sources_min: int = Query(1),
+    min_sources_max: int = Query(50),
+    min_total_min:   int = Query(1),
+    min_total_max:   int = Query(50),
+    ratio_min: float = Query(0.0),     # 0.00 .. 1.00
+    ratio_max: float = Query(0.05),    # 0.00 .. 1.00
     top_n: int = Query(25),
     teaser: bool = Query(False),
     ngram: int = Query(1, ge=1, le=3),
-    min_sources: int = Query(2),
     from_: str | None = Query(None, alias="from"),   # NEU
     to: str | None = Query(None),                     # NEU
     db: Session = Depends(get_db),
@@ -1015,6 +1292,8 @@ def blindspot_keywords_feed(
         int((tw["to"] - tw["from"]).total_seconds() // 3600), 1
     )
     articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
+
+    articles = filter_articles_by_countries(articles, country)
 
     # je "word"/Kombi: alle (x,y)-Punkte + Quellenset sammeln
     coords_by_word = defaultdict(list)
@@ -1059,24 +1338,30 @@ def blindspot_keywords_feed(
     L_kritisch, L_nah, L_national, L_global = [], [], [], []
 
     for w, coords in coords_by_word.items():
-        if len(coords) < min_total:
+        total = len(coords)
+        num_sources = len(sources_by_word[w])
+
+        # Bereiche prüfen
+        if not (min_total_min <= total <= min_total_max):
             continue
+        if not (min_sources_min <= num_sources <= min_sources_max):
+            continue
+
+        # Raten berechnen (wie gehabt)
         x_counts, y_counts = counts_for(coords)
-        total = x_counts["total"] or 1
+        den = x_counts["total"] or 1
+        p_krit = x_counts["kritisch"] / den
+        p_nah  = x_counts["nah"]      / den
+        p_nat  = y_counts["national"] / den
+        p_glo  = y_counts["global"]   / den
 
-        # Quellen-Anzahl prüfen (NEU)
-        if len(sources_by_word[w]) < min_sources:
-            continue
-
-        p_krit = x_counts["kritisch"] / total
-        p_nah  = x_counts["nah"]      / total
-        p_nat  = y_counts["national"] / total
-        p_glo  = y_counts["global"]   / total
+        # In Range? -> dann aufnehmen. (Vorher: nur ≤ ratio_max)
+        def in_range(p): return (ratio_min <= p <= ratio_max)
 
         item = {
             "word": w,
             "counts": {"x": x_counts, "y": y_counts},
-            "sources": len(sources_by_word[w]),
+            "sources": num_sources,
             "total": total,
             "ratios": {
                 "kritisch": round(p_krit, 3),
@@ -1092,19 +1377,28 @@ def blindspot_keywords_feed(
             }
         }
 
+        # Items in jene Liste, wo die jeweilige Achse in der Range liegt
+        if in_range(p_krit): L_kritisch.append(item)
+        if in_range(p_nah):  L_nah.append(item)
+        if in_range(p_nat):  L_national.append(item)
+        if in_range(p_glo):  L_global.append(item)
 
-        if p_krit <= ratio_max: L_kritisch.append(item)
-        if p_nah  <= ratio_max: L_nah.append(item)
-        if p_nat  <= ratio_max: L_national.append(item)
-        if p_glo  <= ratio_max: L_global.append(item)
 
     def sort_list(lst, key_name):
         return sorted(lst, key=lambda it: (it["ratios"][key_name], -it["total"]))[:top_n]
 
     return {
         "params": {
-            "hours": hours, "min_total": min_total, "ratio_max": ratio_max,
-            "top_n": top_n, "ngram": ngram, "teaser": teaser
+            "hours": hours,
+            "min_sources_min": min_sources_min,
+            "min_sources_max": min_sources_max,
+            "min_total_min":   min_total_min,
+            "min_total_max":   min_total_max,
+            "ratio_min":       ratio_min,
+            "ratio_max":       ratio_max,
+            "top_n":           top_n,
+            "ngram":           ngram,
+            "teaser":          teaser,
         },
         "items": {
             "systemkritisch":  sort_list(L_kritisch, "kritisch"),
@@ -1117,6 +1411,7 @@ def blindspot_keywords_feed(
 @router.get("/chronicle/weekly-top3")
 def chronicle_weekly_top3(
     weeks: int = Query(12, ge=1, le=104),                # Anzahl zurückzugebender Wochen (rückwärts)
+    country: list[str] | None = Query(None),
     teaser: bool = Query(False),                         # Teaser berücksichtigen?
     source: list[str] | None = Query(None),              # Mehrfachquellen (?source=…)
     ngram: int = Query(1, ge=1, le=3),                   # 1er/2er/3er-Kombis (optional)
@@ -1226,63 +1521,66 @@ def chronicle_weekly_top3(
 
 @router.get("/chronicle/weekly-top3-all")
 def chronicle_weekly_top3_all(
-    weeks: int = Query(10, ge=1, le=104),               # wie gefordert: default letzte 10 Wochen
-    teaser: bool = Query(False),                         # Teaser berücksichtigen?
-    source: list[str] | None = Query(None),              # Mehrfachquellen (?source=…)
-    from_: str | None = Query(None, alias="from"),       # optionales Zeitfenster
+    weeks: int = Query(5, ge=1, le=104),               # Default: 5 Wochen
+    country: list[str] | None = Query(None),
+    teaser: bool = Query(False),
+    source: list[str] | None = Query(None),
+    from_: str | None = Query(None, alias="from"),
     to: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """
-    Liefert für jede ISO-Kalenderwoche die Top-3 für:
-      - ngram = 1 (Einzel-Keywords)
-      - ngram = 2 (2er-Kombis)
-      - ngram = 3 (3er-Kombis)
-    in EINER Antwort, um Mehrfach-Requests zu vermeiden.
-
-    Antwortform pro Woche:
-    {
-      "iso_year": 2025,
-      "iso_week": 39,
-      "week_label": "KW 39",
-      "start_date": "2025-09-22",
-      "end_date":   "2025-09-28",
-      "top1": [{"word":"...", "count":N}, … bis 3],
-      "top2": [{"word":"a + b", "count":N}, … bis 3],
-      "top3": [{"word":"a + b + c", "count":N}, … bis 3]
-    }
+    Gibt pro ISO-Woche Top-3 für n=1/2/3 zurück.
+    WICHTIG: Wenn 'from'/'to' NICHT übergeben werden, wird der Zeitraum
+    explizit auf die letzten (weeks * 7) Tage gesetzt (Default 5 Wochen),
+    statt ein beliebiges Standardfenster zu verwenden.
     """
     from collections import defaultdict, Counter
     from itertools import combinations
     from datetime import datetime, timedelta, timezone
     from app.core.clean_utils import extract_relevant_words
 
-    # 1) Artikel & Zeitraum über zentrale Helper holen (ASC für stabile Wochen-Gruppierung)
-    arts, start, end, _mode, _bucket = _select_articles(
-        db, hours=None, from_=from_, to=to, unbounded=True, order="asc"
-    )
+    # ---- Zeitraum festziehen -----------------------------------------------
+    # Falls die UI KEIN from/to mitsendet, erzwingen wir hier das 5-Wochen-Fenster.
+    if not from_ and not to:
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        start = (now - timedelta(days=weeks * 7)).replace(hour=0, minute=0, second=0, microsecond=0)
+        # mit explizitem Range über _select_articles laden
+        arts, start, end, _mode, _bucket = _select_articles(
+            db,
+            hours=None,
+            from_=start.isoformat(),
+            to=now.isoformat(),           # exklusiv
+            unbounded=True,
+            order="asc",
+        )
+    else:
+        # Wenn from/to gesetzt ist, respektieren wir die UI-Auswahl
+        arts, start, end, _mode, _bucket = _select_articles(
+            db, hours=None, from_=from_, to=to, unbounded=True, order="asc"
+        )
+        arts = filter_articles_by_countries(arts, country)
 
-    # 2) Quellenfilter (Mehrfach)
+    # ---- Quellenfilter ------------------------------------------------------
     if source:
         wanted = { (s or "").strip().lower() for s in source if s and s.strip() }
         if wanted:
             def norm(x): return (x or "").strip().lower()
             arts = [a for a in arts if norm(getattr(a, "source", None)) in wanted]
 
-    # 3) Pro ISO-Woche 3 Counter pflegen (ngram=1/2/3) + Bounds (Montag..Sonntag)
+    # ---- Pro ISO-Woche Zähler für n=1/2/3 + Bounds --------------------------
     week_counts_1: dict[tuple[int,int], Counter] = defaultdict(Counter)
     week_counts_2: dict[tuple[int,int], Counter] = defaultdict(Counter)
     week_counts_3: dict[tuple[int,int], Counter] = defaultdict(Counter)
     week_bounds: dict[tuple[int,int], tuple[datetime, datetime]] = {}
 
     def iso_week_bounds(d_utc: datetime):
-        # Normalisiere auf 00:00 UTC und ermittle Montag 00:00 bis Montag(+7) 00:00 (exklusiv)
         d0 = d_utc.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        wd = (d0.isoweekday() % 7)  # Mo=1..So=7 -> 0..6 (So=0)
+        wd = (d0.isoweekday() % 7)            # Mo=1..So=7 -> 0..6 (So=0)
         monday = d0 - timedelta(days=(wd-1 if wd != 0 else 6))
-        if wd == 0:  # Sonntag
+        if wd == 0:                            # Sonntag
             monday = d0 - timedelta(days=6)
-        end_ex = monday + timedelta(days=7)
+        end_ex = monday + timedelta(days=7)    # exklusiv
         return monday, end_ex
 
     for a in arts:
@@ -1294,12 +1592,10 @@ def chronicle_weekly_top3_all(
         iso_year, iso_week, _ = dt.isocalendar()
         key = (iso_year, iso_week)
 
-        # Bounds einmalig ermitteln
         if key not in week_bounds:
             w_start, w_end_ex = iso_week_bounds(dt)
             week_bounds[key] = (w_start, w_end_ex)
 
-        # Tokens (einmal extrahieren → für n=1/2/3 wiederverwenden)
         tokens = set(extract_relevant_words(a.title or ""))
         if teaser and getattr(a, "teaser", None):
             tokens |= set(extract_relevant_words(a.teaser or ""))
@@ -1323,22 +1619,17 @@ def chronicle_weekly_top3_all(
     if not week_bounds:
         return []
 
-    # 4) Wochen nach Start absteigend sortieren und auf 'weeks' begrenzen
+    # Neueste Wochen zuerst; auf 'weeks' begrenzen
     weeks_sorted = sorted(week_bounds.keys(), key=lambda k: week_bounds[k][0], reverse=True)[:weeks]
 
-    # 5) Ausgabe
+    def top3(counter: Counter):
+        return [{"word": term, "count": int(cnt)} for term, cnt in counter.most_common(3)]
+
     out = []
     for key in weeks_sorted:
         iso_year, iso_week = key
         w_start, w_end_ex = week_bounds[key]
         end_inclusive = (w_end_ex - timedelta(seconds=1))
-
-        def top3(counter: Counter):
-            return [
-                {"word": term, "count": int(cnt)}
-                for term, cnt in counter.most_common(3)
-            ]
-
         out.append({
             "iso_year": iso_year,
             "iso_week": iso_week,
@@ -1349,6 +1640,181 @@ def chronicle_weekly_top3_all(
             "top2": top3(week_counts_2.get(key, Counter())),
             "top3": top3(week_counts_3.get(key, Counter())),
         })
-
     return out
+
+
+@router.get("/countries")
+def list_countries():
+    """Liefert die in der CSV gepflegten Ländercodes (DE, AT, CH, …)."""
+    return {"countries": available_countries()}
+
+
+def filter_articles_by_countries(articles, countries: list[str] | None):
+    """Filtert Artikel anhand des Ländercodes des Mediums (aus der CSV)."""
+    if not countries:
+        return articles
+    wanted = {c.strip().upper() for c in countries if c and c.strip()}
+    cmap = country_map()
+    return [a for a in articles if cmap.get(norm_source(getattr(a, "source", "")), "UN") in wanted]
+
+
+@router.get("/countries/compare")
+def countries_compare(
+    metric: str = Query("articles"),     # später: "keywords_top", "ngrams2", ...
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    articles, start, end, mode, bucket = _select_articles(db, hours=None, from_=from_, to=to, unbounded=True, order="asc")
+    cmap = country_map()
+    from collections import Counter
+    c = Counter()
+    for a in articles:
+        c[cmap.get(norm_source(getattr(a, "source", "")), "UN")] += 1
+    # Ausgabe: [{country:"DE", value: 123}, ...] – gut für Charts
+    return [{"country": k, "value": int(v)} for k, v in sorted(c.items())]
+
+
+@router.get("/keywords/sankey")
+def keyword_sankey(
+    word: str,
+    hours: int = Query(72),
+    country: list[str] | None = Query(None),
+    source: list[str] | None = Query(None),   # Mehrfachquellen
+    teaser: bool = Query(False),
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Liefert für das Sankey je Bereich:
+      - total_sources: Anzahl unterschiedlicher Medien im Bereich (aus Medienliste/CSV, gefiltert)
+      - hit_sources:   Anzahl dieser Medien, die im Zeitfenster das Keyword ≥1× verwendet haben
+    Bereiche: systemkritisch, systemnah (X); nationalistisch, globalistisch (Y)
+    """
+    import re
+
+    # 1) Zeitfenster & Artikel holen (für Treffer)
+    arts, start, end, _mode, _bucket = _select_articles(
+        db, hours=hours, from_=from_, to=to, unbounded=True, order="asc"
+    )
+    arts = filter_articles_by_countries(arts, country)
+
+    # Wenn Quellenfilter gesetzt ist: Artikel auf diese Quellen begrenzen (nur Performance)
+    if source:
+        wanted = {(s or "").strip().lower() for s in source if s and s.strip()}
+        if wanted:
+            arts = [a for a in arts if (a.source or "").strip().lower() in wanted]
+
+    # 2) Medienkompass & Bucket-Zuordnung (aus CSV)
+    df = load_media_df()
+    bias = {
+        row["norm_name"]: (row["Systemnähe (X)"], row["Globalismus (Y)"])
+        for _, row in df.iterrows()
+    }
+    T = 0.01  # Schwellen wie in /keywords/sides
+
+    def buckets_for(norm_name: str):
+        x, y = bias[norm_name]
+        bx = "systemkritisch" if x <= -T else ("systemnah" if x >= T else None)
+        by = "nationalistisch" if y <= -T else ("globalistisch" if y >= T else None)
+        return bx, by
+
+    # 3) Grundgesamtheit: aus Medienliste (CSV), nur durch Country/Source-Filter einschränken
+    #    -> unabhängig davon, ob im Zeitraum Artikel vorhanden sind
+    # Basis-Kandidaten: alle norm_name aus df
+    allowed_sources = {row["norm_name"] for _, row in df.iterrows()}
+
+    # Country-Filter (falls df eine Country-Spalte hat)
+    if country:
+        wanted_countries = {c.upper() for c in country}
+        country_cols = [c for c in df.columns if c.lower() in ("country", "country_code", "land", "laendercode")]
+        if country_cols:
+            col = country_cols[0]
+            keep = set(
+                df[df[col].astype(str).str.upper().isin(wanted_countries)]["norm_name"]
+            )
+            allowed_sources &= keep
+
+    # Source-Filter (über norm_name, lower-normalisiert)
+    if source:
+        wanted = {(s or "").strip().lower() for s in source if s and s.strip()}
+        keep = {nm for nm in allowed_sources if nm.lower() in wanted}
+        allowed_sources = keep
+
+    # totals je Bucket aus allowed_sources (X- und Y-Achse getrennt zählen)
+    totals = {
+        "systemkritisch": set(),
+        "systemnah": set(),
+        "nationalistisch": set(),
+        "globalistisch": set(),
+    }
+    for n in allowed_sources:
+        if n not in bias:
+            continue
+        bx, by = buckets_for(n)
+        if bx:
+            totals[bx].add(n)
+        if by:
+            totals[by].add(n)
+
+    # 4) Keyword-Matches: pro Medium merken, ob es das Keyword verwendet hat (im Zeitraum)
+    raw = (word or "").strip().lower()
+    terms = [t for t in (p.strip() for p in raw.split("+")) if t]
+    if not terms:
+        return {"error": "word required"}
+
+    patterns = [re.compile(rf"\b{re.escape(t)}\b") for t in terms]
+
+    def match_txt(title, teaser_txt):
+        title = (title or "").lower()
+        te = (teaser_txt or "").lower() if teaser and teaser_txt else ""
+        # UND-Verknüpfung der Teilbegriffe: alle müssen in Titel oder (optional) Teaser vorkommen
+        return all(p.search(title) or (te and p.search(te)) for p in patterns)
+
+    used_by_source = set()
+    for a in arts:
+        if not a.source:
+            continue
+        n = norm_source(a.source)
+        # Nur Medien zählen, die in der Grundgesamtheit sind
+        if n not in allowed_sources or n not in bias:
+            continue
+        if match_txt(a.title, a.teaser):
+            used_by_source.add(n)
+
+    hits = {
+        "systemkritisch": set(),
+        "systemnah": set(),
+        "nationalistisch": set(),
+        "globalistisch": set(),
+    }
+    for n in used_by_source:
+        bx, by = buckets_for(n)
+        if bx:
+            hits[bx].add(n)
+        if by:
+            hits[by].add(n)
+
+    # 5) Antwortstruktur
+    out = []
+    order = ["systemkritisch", "systemnah", "nationalistisch", "globalistisch"]
+    for key in order:
+        total = len(totals[key])
+        cnt = len(hits[key])
+        pct = round((cnt / total * 100.0), 1) if total else 0.0
+        out.append(
+            {
+                "bucket": key,
+                "total_sources": total,
+                "hit_sources": cnt,
+                "pct": pct,
+            }
+        )
+
+    return {
+        "word": word,
+        "range": {"from": start.isoformat(), "to": end.isoformat()},
+        "items": out,
+    }
 
