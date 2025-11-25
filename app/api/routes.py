@@ -10,7 +10,7 @@ import re
 import pandas as pd
 
 from fastapi import APIRouter, Query, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
@@ -36,6 +36,7 @@ from fastapi import Response
 router = APIRouter()
 
 MEDIA_CSV_PATH = Path("app/static/Medien-Kompass__Systemn_he_.csv")
+
 
 
 @lru_cache(maxsize=1)
@@ -91,6 +92,7 @@ def _select_articles(
         articles = list(sorted(articles, key=lambda a: a.published_at))
 
     return articles, start, end, mode, bucket
+
 
 
 

@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}News Trends – Keyword-Ansicht{% endblock %}
+
+{% block content %}
+
+  <!-- Wortwolke + spezifische Wordcloud-Filter -->
+  <section id="heroWordcloud">
+    <div class="wordcloud-heading"></div>
+    <div id="wordcloud"></div>
+  </section>
+
+  <section class="drawer-section">
+    <h4>Filter für Wortwolke</h4>
+
+    <label class="wc-filter">
+      <span class="wc-filter__label">Anzahl Keywords:</span>
+      <input id="wcCount" class="wc-filter__range" type="range"
+             min="10" max="250" step="5" value="120">
+      <span id="wcCountVal" class="wc-filter__value">120</span>
+    </label>
+
+    <label class="wc-filter">
+      <span class="wc-filter__label">Mindest­nennungen pro Keyword:</span>
+      <input id="wcMin" class="wc-filter__range" type="range"
+             min="1" max="50" step="1" value="7">
+      <span id="wcMinVal" class="wc-filter__value">≥ 7×</span>
+    </label>
+
+    <div class="biasFilters btn-row">
+      <button type="button" data-bias="systemkritisch">Systemkritisch</button>
+      <button type="button" data-bias="systemnah">Systemnah</button>
+      <button type="button" data-bias="globalistisch">Globalistisch</button>
+      <button type="button" data-bias="nationalistisch">Nationalistisch</button>
+      <button type="button" id="biasClearBtn" data-role="bias-clear">Alle</button>
+    </div>
+  </section>
+
+  <!-- Medien-Kompass + Zeitverlauf der Tags -->
+  <div class="chart-row">
+    <div class="chart-box">
+      <h2>🧭 Medien-Kompass</h2>
+      <canvas id="mediaCompassChart"></canvas>
+    </div>
+    <div class="chart-box">
+      <h2>⏲️ Zeitverlauf der Tags</h2>
+      <div id="timelineChartWrap">
+        <canvas id="timelineChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keyword-Verteilung (X/Y) + Mini-Heatmap + Sankey -->
+  <section class="chart-box" id="keywordSidesBox">
+    <h2>🧭 Keyword-Verteilung (X/Y)</h2>
+
+    <div id="keywordSides"></div>
+
+    <div id="keywordHeatMiniWrap"
+         style="position:relative;width:100%;height:560px;margin-top:16px;
+                border:1px solid #eee;border-radius:12px;background:#fff;overflow:hidden;">
+      <svg id="keywordHeatMini" style="position:absolute;inset:0;"></svg>
+      <div id="keywordHeatMiniEmpty" class="chart-overlay-empty" style="display:none;">
+        Keine Heatmap-Daten
+      </div>
+    </div>
+
+    <div id="keywordSankeyWrap" class="sankey-wrap">
+      <svg id="keywordSankey" class="sankey-canvas"></svg>
+      <div id="keywordSankeyEmpty" class="chart-overlay-empty is-hidden">
+        Kein Sankey – bitte ein Keyword wählen
+      </div>
+    </div>
+  </section>
+
+  <!-- Scatter + Heatmap-Overlay -->
+  <section class="chart-box" id="keywordChartOverlayBox">
+    <h2>🧭 Keyword-Koordinaten &amp; Heatmap</h2>
+    <div id="keywordChartOverlayContainer"
+         style="position: relative; width: 100%; max-width: 1000px; height: 600px; margin: auto;">
+      <svg id="keywordHeatmapOverlay"
+           style="position: absolute; top: 0; left: 0; z-index: 100; pointer-events: none;"></svg>
+      <canvas id="keywordScatterChart"
+              style="z-index: 1000; width: 100%; height: 100%; display: block;"></canvas>
+    </div>
+  </section>
+
+  <!-- Gefilterte Artikel -->
+  <section class="chart-box">
+    <h2>Gefilterte Artikel</h2>
+    <div id="filteredArticles"></div>
+  </section>
+
+{% endblock %}

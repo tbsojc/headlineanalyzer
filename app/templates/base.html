@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>News Trends &amp; Visuals – Keyword-Ansicht</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+  <script src="https://d3js.org/d3.v7.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3-cloud/build/d3.layout.cloud.min.js" defer></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/de.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js" defer></script>
+  <script src="/static/app-common.js" defer></script>
+
+
+</head>
+<body>
+
+<!-- Top-Bar -->
+<nav class="topbar">
+  <button id="filterOpen" aria-label="Filter öffnen">☰ Filter</button>
+  <div class="title">📰 News Trends</div>
+  <div class="right">
+    <input type="text" id="keywordInput" placeholder="🔍 z. B. Klima">
+    <button onclick="searchByKeyword()">Suchen</button>
+    <button onclick="resetFilters()">Reset</button>
+  </div>
+</nav>
+
+<!-- Aktive Filter: immer sichtbar -->
+<div id="alerts"></div>
+<div id="activeFiltersBar" class="active-filters-bar" aria-live="polite"></div>
+
+<!-- Drawer (Off-Canvas) -->
+<aside id="filterDrawer" class="drawer" aria-hidden="true">
+  <header class="drawer-header">
+    <h3>Filter</h3>
+    <button id="drawerClose" aria-label="Filter schließen">✕</button>
+  </header>
+
+  <section class="drawer-section">
+    <h4>Zeitraum</h4>
+    <div class="time-presets">
+      <button type="button" data-days="1">1 Tag</button>
+      <button type="button" data-days="3">3 Tage</button>
+      <button type="button" data-days="7">7 Tage</button>
+      <button type="button" data-days="30">30 Tage</button>
+      <button type="button" id="btnCustomRange">Benutzerdefiniert…</button>
+    </div>
+
+    <div id="active-filters">
+      <span id="date-range-badge" class="filter-badge" style="display:none">
+        <span class="icon">📅</span>
+        <span class="label" aria-live="polite"></span>
+        <span class="remove" title="Entfernen" aria-label="Zeitraum entfernen">×</span>
+      </span>
+    </div>
+  </section>
+
+  <section class="drawer-section">
+    <h4>Kombi-Länge</h4>
+    <div class="btnrow" id="ngramButtons">
+      <button onclick="setNgram(1)">1 Wort</button>
+      <button onclick="setNgram(2)">2er-Kombis</button>
+      <button onclick="setNgram(3)">3er-Kombis</button>
+    </div>
+  </section>
+
+  <section class="drawer-section">
+    <h4>Quelle</h4>
+    <div class="biasFilters btn-row" id="biasFilters">
+      <button type="button" data-bias="systemkritisch">Systemkritisch</button>
+      <button type="button" data-bias="systemnah">Systemnah</button>
+      <button type="button" data-bias="globalistisch">Globalistisch</button>
+      <button type="button" data-bias="nationalistisch">Nationalistisch</button>
+      <button type="button" id="biasClearBtn" data-role="bias-clear">Alle</button>
+    </div>
+    <div class="multiselect" id="sourceMultiSelect">
+      <button type="button" id="sourceMultiBtn">Alle Quellen</button>
+      <div class="multiselect-panel" id="sourcePanel" hidden></div>
+    </div>
+    <select id="sourceSelect" style="display:none">
+      <option value="">-- Alle Quellen --</option>
+      <!-- Alle deine Optionen wie in index.html … -->
+      <option value="Zeit">Zeit</option>
+      <option value="Spiegel">Spiegel</option>
+      <option value="Süddeutsche">Süddeutsche</option>
+      <option value="Handelsblatt">Handelsblatt</option>
+      <option value="Deutschlandfunk">Deutschlandfunk</option>
+      <option value="Tagesschau">Tagesschau</option>
+      <option value="FAZ">FAZ</option>
+      <option value="n-tv">n-tv</option>
+      <option value="Focus Politik">Focus Politik</option>
+      <option value="Welt">Welt</option>
+      <option value="RP Online">RP Online</option>
+      <option value="Stern">Stern</option>
+      <option value="Tichys Einblick">Tichys Einblick</option>
+      <option value="Reitschuster">Reitschuster</option>
+      <option value="Unzensuriert">Unzensuriert</option>
+      <option value="Achse des Guten">Achse des Guten</option>
+      <option value="Anti-Spiegel">Anti-Spiegel</option>
+      <option value="Telepolis Politik">Telepolis Politik</option>
+      <option value="NachDenkSeiten">NachDenkSeiten</option>
+      <option value="Volksverpetzer">Volksverpetzer</option>
+      <option value="Krautzone">Krautzone</option>
+      <option value="Niggemeier/Übermedien">Niggemeier/Übermedien</option>
+      <option value="taz">taz</option>
+      <option value="junge Welt">junge Welt</option>
+      <option value="NZZ Deutschland">NZZ Deutschland</option>
+      <option value="Watson Deutschland">Watson Deutschland</option>
+      <option value="Frankfurter Rundschau">Frankfurter Rundschau</option>
+      <option value="Bild">Bild</option>
+      <option value="Nius">Nius</option>
+      <option value="Deutsche Wirtschaftsnachrichten">Deutsche Wirtschaftsnachrichten</option>
+      <option value="Manova">Manova</option>
+      <option value="Auf1">Auf1</option>
+      <option value="RT DE">RT DE</option>
+      <option value="Correctiv">Correctiv</option>
+      <option value="Netzpolitik.org">Netzpolitik.org</option>
+      <option value="Norbert Häring">Norbert Häring</option>
+      <option value="Overton-Magazin (Politik)">Overton-Magazin (Politik)</option>
+      <option value="Berliner Zeitung (Politik)">Berliner Zeitung (Politik)</option>
+      <option value="der Freitag (Politik)">der Freitag (Politik)</option>
+      <option value="Makroskop">Makroskop</option>
+      <option value="German Foreign Policy">German Foreign Policy</option>
+      <option value="Infosperber (Politik)">Infosperber (Politik)</option>
+      <option value="TauBlog (Politik)">TauBlog (Politik)</option>
+      <option value="Jacobin Deutschland">Jacobin Deutschland</option>
+      <option value="Multipolar">Multipolar</option>
+      <option value="Junge Freiheit">Junge Freiheit</option>
+      <option value="neues deutschland">neues deutschland</option>
+      <option value="Blackout News">Blackout News</option>
+      <option value="Cicero">Cicero</option>
+      <option value="rnd">rnd</option>
+      <option value="Alexander Wallasch">Alexander Wallasch</option>
+      <option value="Compact">Compact</option>
+      <option value="Epoch Times">Epoch Times</option>
+      <option value="apolut">apolut</option>
+      <option value="t-online">t-online</option>
+      <option value="tkp">tkp</option>
+      <option value="Katapult">Katapult</option>
+      <option value="Blick">Blick</option>
+      <option value="Watson Schweiz">Watson Schweiz</option>
+      <option value="NZZ Schweiz">NZZ Schweiz</option>
+      <option value="Republik">Republik</option>
+      <option value="Kronen Zeitung">Kronen Zeitung</option>
+      <option value="Kurier">Kurier</option>
+      <option value="Hoch2">Hoch2</option>
+      <option value="Apollo News">Apollo News</option>
+      <option value="NEX24">NEX24</option>
+      <option value="BildBlog">BildBlog</option>
+      <option value="IRNA News">IRNA News</option>
+      <option value="Granma">Granma</option>
+      <option value="Weltwoche">Weltwoche</option>
+      <option value="Schweizerzeit">Schweizerzeit</option>
+    </select>
+  </section>
+
+  <section class="drawer-section">
+    <h4>Land</h4>
+    <div class="multiselect" id="countryMultiSelect">
+      <button type="button" id="countryMultiBtn">Alle Länder</button>
+      <div class="multiselect-panel" id="countryPanel" hidden></div>
+    </div>
+  </section>
+
+  <section class="drawer-section">
+    <label class="teaser-inline">
+      <input type="checkbox" id="teaserToggle"> Teaser einbeziehen
+    </label>
+  </section>
+
+  <footer class="drawer-footer">
+    <button id="drawerDone">Fertig</button>
+  </footer>
+</aside>
+
+<div id="scrim" class="scrim" aria-hidden="true"></div>
+
+{% block content %}
+{% endblock %}
+
+
+{% block scripts %}{% endblock %}
+
+</body>
+</html>

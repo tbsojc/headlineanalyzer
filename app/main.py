@@ -1,11 +1,14 @@
 # ============================
 # 📁 app/main.py
 
-from fastapi import FastAPI
-from fastapi.responses import ORJSONResponse
+from fastapi.templating import Jinja2Templates
+from fastapi import FastAPI, Request
+from fastapi.responses import ORJSONResponse, HTMLResponse
 from starlette.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+
 
 from fastapi_utils.tasks import repeat_every
 
@@ -35,8 +38,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Static files ---
-app.mount("/ui", StaticFiles(directory="app/static", html=True), name="static")
+# --- Static files für Assets (CSS, Bilder etc.) ---
+app.mount("/static", StaticFiles(directory="app/static", html=False), name="static")
+
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+@app.get("/ui/", response_class=HTMLResponse)
+async def ui_root(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/ui/{keyword}", response_class=HTMLResponse)
+async def ui_detail(request: Request, keyword: str):
+    return templates.TemplateResponse("keyword.html", {
+        "request": request,
+        "keyword": keyword,
+    })
+
 
 # --- Router ---
 app.include_router(api_router)
