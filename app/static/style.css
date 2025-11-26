@@ -1296,3 +1296,4 @@ input[type="text"]:focus, select:focus { border-color: #3b82f6; }
 /* Responsiv */
 @media (max-width: 980px) { .blindspot-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 560px) { .blindspot-grid { grid-template-columns: 1fr; } }
+

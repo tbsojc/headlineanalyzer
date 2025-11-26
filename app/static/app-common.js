@@ -8,6 +8,8 @@
     let _lastCompassKey = '';
     let USER_TIME_OVERRIDE = false;
 
+
+
     // Zentrale Filter – eine Quelle der Wahrheit
     const FILTERS = {
       from: null,
@@ -366,6 +368,8 @@ async function searchByKeyword(kw = null) {
   loadBlindspotFeed();
   loadWordcloud();
   updateFilterDisplay();
+
+
 
   // --- NEU/robust ---
   const box = document.getElementById("keywordSides");
@@ -1137,11 +1141,7 @@ function draw(words) {
     });
   }
 }
-
-
 }
-
-
 
 
 async function loadMediaCompass() {

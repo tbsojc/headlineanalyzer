@@ -33,6 +33,7 @@ from math import ceil
 from fastapi import Response
 
 
+
 router = APIRouter()
 
 MEDIA_CSV_PATH = Path("app/static/Medien-Kompass__Systemn_he_.csv")
