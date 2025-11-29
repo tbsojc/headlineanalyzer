@@ -10,6 +10,7 @@
 
 
 
+
     // Zentrale Filter – eine Quelle der Wahrheit
     const FILTERS = {
       from: null,
@@ -368,6 +369,7 @@ async function searchByKeyword(kw = null) {
   loadBlindspotFeed();
   loadWordcloud();
   updateFilterDisplay();
+  renderKeywordMeta(keyword);
 
 
 
@@ -380,8 +382,9 @@ async function searchByKeyword(kw = null) {
     const sides = await loadKeywordSides(keyword);
     if (sides) {
       renderKeywordSidesBars(box, sides);
-      await loadKeywordDensityMini(keyword);   // ← Mini-Heatmap rechts
-      // optional: box.scrollIntoView({ behavior: "smooth", block: "start" });
+      await loadKeywordDensityMini(keyword);
+
+
     } else {
       box.textContent = "Keine Daten für dieses Keyword im aktuellen Zeitfenster.";
     }
@@ -390,6 +393,7 @@ async function searchByKeyword(kw = null) {
     box.textContent = "Fehler beim Laden der Verteilung.";
     showMiniEmpty("Fehler beim Laden");
   }
+
 }
 
 
@@ -813,6 +817,7 @@ function biasPassesFilters(bias) {
   }
   return false;
 }
+
 
 
 function setNgram(n){
@@ -1476,88 +1481,354 @@ async function renderKeywordTimeline(keyword) {
   if (!keyword) return;
 
   const qs = new URLSearchParams({ word: keyword });
-  if (FILTERS.teaser) qs.set("teaser", "true");
-  appendSources(qs);
-  appendCountries(qs);
 
-  const res = await fetch(withTime("/keywords/timeline", qs.toString()));
-  if (!res.ok) return;
-  const data = await res.json();
+  // hier verwendest du weiterhin deinen aktuellen Zeitraum-Mechanismus,
+  // z. B. über DATE_FROM/DATE_TO oder eine appendDateRange-Funktion.
+  if (typeof FILTERS !== "undefined" && FILTERS && FILTERS.teaser) {
+    qs.set("teaser", "true");
+  }
+  if (typeof appendSources === "function") {
+    appendSources(qs);
+  }
+  if (typeof appendCountries === "function") {
+    appendCountries(qs);
+  }
+  // Falls du eine Funktion hast, die das Date-Range dranhängt, kannst du sie hier lassen:
+  if (typeof appendDateRange === "function") {
+    appendDateRange(qs);
+  }
 
-  const chartWrap = document.getElementById('timelineChartWrap');
-  const canvas    = document.getElementById('timelineChart');
+  const url = (typeof withTime === "function")
+    ? withTime("/keywords/timeline", qs.toString())
+    : `/keywords/timeline?${qs.toString()}`;
+
+  let data;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.error("Fehler beim Laden der Timeline:", res.status, res.statusText);
+      return;
+    }
+    data = await res.json();
+  } catch (e) {
+    console.error("Fehler beim Laden der Timeline:", e);
+    return;
+  }
+
+  const chartWrap = document.getElementById("timelineChartWrap");
+  const canvas    = document.getElementById("timelineChart");
   if (!chartWrap || !canvas) return;
 
-  // Empty-State
-  if (!Array.isArray(data) || data.length === 0 || data.every(d => (d.count||0) === 0)) {
-    mountChartEmptyOverlay(chartWrap, "Keine Timeline-Daten im gewählten Zeitraum");
-    const ctx = canvas.getContext('2d'); ctx.clearRect(0,0,canvas.width,canvas.height);
-    if (window.keywordTimelineChart instanceof Chart) {
-      window.keywordTimelineChart.destroy();
-      window.keywordTimelineChart = null;
+  if (!Array.isArray(data) || data.length === 0 || data.every(d => (d.count || 0) === 0)) {
+    if (keywordTimelineChart) {
+      keywordTimelineChart.destroy();
+      keywordTimelineChart = null;
     }
+    // Stats NICHT hier berechnen → das macht loadKeywordStatsAllTime()
     return;
-  } else {
-    hideChartEmptyOverlay(chartWrap);
   }
 
+  // Chart-Daten für aktuellen Zeitraum
   const labels = data.map(d => {
-    const dt = new Date(d.time); // ISO, Mitternacht UTC
-    return new Intl.DateTimeFormat('de-DE', { weekday:'short', day:'2-digit', month:'2-digit' }).format(dt);
+    const dt = new Date(d.time);
+    return new Intl.DateTimeFormat("de-DE", {
+      day: "2-digit",
+      month: "2-digit",
+    }).format(dt);
   });
-  const values = data.map(d => d.count);
 
-  const ctx = canvas.getContext('2d');
+  const values = data.map(d => d.count || 0);
 
-  // Wenn bereits vorhanden, aber als anderer Typ → neu erstellen
-  if (window.keywordTimelineChart instanceof Chart && window.keywordTimelineChart.config.type !== 'bar') {
-    window.keywordTimelineChart.destroy();
-    window.keywordTimelineChart = null;
+  if (keywordTimelineChart) {
+    keywordTimelineChart.destroy();
   }
 
-  if (!(window.keywordTimelineChart instanceof Chart)) {
-    window.keywordTimelineChart = new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels,
-        datasets: [{
-          label: 'Anzahl Artikel pro Tag',
+  const ctx = canvas.getContext("2d");
+
+  keywordTimelineChart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Nennungen pro Tag",
           data: values,
-          borderWidth: 1,
-          borderRadius: 6,         // abgerundete Balken
-          maxBarThickness: 42,     // verhindert zu breite Balken
-          categoryPercentage: 0.8,
-          barPercentage: 0.9
-          // Farbe: Chart.js nimmt Standardfarben/Theming; bei Bedarf hier backgroundColor setzen
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: { mode: 'index', intersect: false }
+          tension: 0.25,
+          fill: false,
+          borderWidth: 2,
+          pointRadius: 2,
         },
-        scales: {
-          x: {
-            ticks: { autoSkip: true, maxTicksLimit: 10 },
-            grid: { display: false }
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: {
+        mode: "index",
+        intersect: false,
+      },
+      scales: {
+        x: {
+          ticks: {
+            maxRotation: 0,
+            autoSkip: true,
           },
-          y: {
-            beginAtZero: true,
-            ticks: { precision: 0 }, // nur ganze Zahlen
-            title: { display: false }
-          }
-        }
-      }
-    });
+        },
+        y: {
+          beginAtZero: true,
+          ticks: {
+            precision: 0,
+          },
+        },
+      },
+      plugins: {
+        legend: {
+          display: false,
+        },
+      },
+    },
+  });
+
+  // 🔁 Ganz am Ende: All-Time Stats separat laden (zweiter Request)
+  loadKeywordStatsAllTime(keyword);
+}
+
+function computeKeywordStatsFromTimeline(data) {
+  if (!Array.isArray(data) || data.length === 0) {
+    return {
+      total: 0,
+      days: 0,
+      avgPerDay: 0,
+      record: null,
+      streakDays: 0,
+    };
+  }
+
+  let total = 0;
+  let record = null;
+
+  // Grundstats: Summe, Rekord
+  for (const entry of data) {
+    const count = entry.count || 0;
+    const time  = entry.time;
+
+    total += count;
+
+    if (
+      !record ||
+      count > record.count ||
+      (count === record.count && new Date(time) < new Date(record.time))
+    ) {
+      record = { time, count };
+    }
+  }
+
+  const days = data.length;
+  const avgPerDay = days ? total / days : 0;
+
+  // Streak: vom letzten Tag rückwärts zählen, bis ein Tag 0 hat
+  let streakDays = 0;
+  for (let i = data.length - 1; i >= 0; i--) {
+    const c = data[i].count || 0;
+    if (c > 0) {
+      streakDays += 1;
+    } else {
+      break;
+    }
+  }
+
+  return {
+    total,
+    days,
+    avgPerDay,
+    record,
+    streakDays,
+  };
+}
+
+
+function updateKeywordStatsUI(stats) {
+  const elRecord = document.getElementById("statRecord");
+  const elStreak = document.getElementById("statStreak");
+  const elAvg    = document.getElementById("statAvg");
+
+  if (!elRecord || !elStreak || !elAvg) {
+    return;
+  }
+
+  const fmtDate = (iso) => {
+    if (!iso) return "–";
+    const d = new Date(iso);
+    return new Intl.DateTimeFormat("de-DE", {
+      weekday: "short",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }).format(d);
+  };
+
+  // Rekord
+  if (stats.record && stats.record.count > 0) {
+    elRecord.textContent = `${fmtDate(stats.record.time)} (${stats.record.count})`;
   } else {
-    const ch = window.keywordTimelineChart;
-    ch.data.labels = labels;
-    ch.data.datasets[0].data = values;
-    ch.update();
+    elRecord.textContent = "–";
+  }
+
+  // Streak (Tage am Stück mit count > 0 am Ende der Reihe)
+  const streak = typeof stats.streakDays === "number" ? stats.streakDays : 0;
+  elStreak.textContent = streak.toString();
+
+  // Ø pro Tag (alle Nennungen / alle Tage)
+  if (stats.days > 0) {
+    const rounded = stats.avgPerDay.toFixed(2).replace(".", ",");
+    elAvg.textContent = `${rounded}`;
+  } else {
+    elAvg.textContent = "0,00";
   }
 }
+
+async function loadKeywordStatsAllTime(keyword) {
+  if (!keyword) return;
+
+  const qs = new URLSearchParams({ word: keyword });
+
+  // dieselben Filter wie sonst – aber OHNE UI-Date-Range
+  if (typeof FILTERS !== "undefined" && FILTERS && FILTERS.teaser) {
+    qs.set("teaser", "true");
+  }
+  if (typeof appendSources === "function") {
+    appendSources(qs);
+  }
+  if (typeof appendCountries === "function") {
+    appendCountries(qs);
+  }
+
+  // Begrenzung auf maximal 180 Tage:
+  // wir holen genau die letzten 180 Tage (inkl. heute)
+  const now = new Date();
+
+  // Ende: heutiges Datum (nur YYYY-MM-DD)
+  const endDate = now.toISOString().slice(0, 10);
+
+  // Start: 179 Tage vor heute -> insgesamt 180 Tage
+  const start = new Date(now.getTime() - 179 * 24 * 60 * 60 * 1000);
+  const startDate = start.toISOString().slice(0, 10);
+
+  qs.set("from", startDate); // z.B. "2025-06-03"
+  qs.set("to", endDate);     // z.B. "2025-11-29"
+
+  const url = (typeof withTime === "function")
+    ? withTime("/keywords/timeline", qs.toString())
+    : `/keywords/timeline?${qs.toString()}`;
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.error("Fehler beim Laden der All-Time Timeline (180 Tage):", res.status, res.statusText);
+      // bei 400 hier einfach abbrechen, keine Exception werfen
+      return;
+    }
+
+    const data = await res.json();
+
+    if (!Array.isArray(data) || data.length === 0) {
+      if (typeof updateKeywordStatsUI === "function") {
+        updateKeywordStatsUI({
+          total: 0,
+          days: 0,
+          avgPerDay: 0,
+          record: null,
+          streakDays: 0,
+        });
+      }
+      return;
+    }
+
+    if (typeof computeKeywordStatsFromTimeline === "function" &&
+        typeof updateKeywordStatsUI === "function") {
+      const stats = computeKeywordStatsFromTimeline(data);
+      updateKeywordStatsUI(stats);
+    }
+  } catch (e) {
+    console.error("Fehler beim Laden der All-Time Timeline (180 Tage):", e);
+  }
+}
+
+async function renderKeywordMeta(keyword) {
+  if (!keyword) return;
+
+  const qs = new URLSearchParams({ word: keyword });
+
+  // dieselben Filter wie sonst
+  if (typeof FILTERS !== "undefined" && FILTERS && FILTERS.teaser) {
+    qs.set("teaser", "true");
+  }
+  if (typeof appendSources === "function") {
+    appendSources(qs);
+  }
+  if (typeof appendCountries === "function") {
+    appendCountries(qs);
+  }
+
+  const url = (typeof withTime === "function")
+    ? withTime("/keywords/meta", qs.toString())
+    : `/keywords/meta?${qs.toString()}`;
+
+  let meta;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.error("Fehler bei /keywords/meta:", res.status, res.statusText);
+      return;
+    }
+    meta = await res.json();
+  } catch (e) {
+    console.error("Fehler bei /keywords/meta:", e);
+    return;
+  }
+
+  const elTopSource     = document.getElementById("metaTopSource");
+  const elTopSourceAvg  = document.getElementById("metaTopSourceAvg");
+  const elFirstDate     = document.getElementById("metaFirstDate");
+  const elFirstSource   = document.getElementById("metaFirstSource");
+
+  if (!elTopSource || !elTopSourceAvg || !elFirstDate || !elFirstSource) {
+    return;
+  }
+
+  const fmtDate = (iso) => {
+    if (!iso) return "–";
+    const d = new Date(iso);
+    return new Intl.DateTimeFormat("de-DE", {
+      weekday: "short",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }).format(d);
+  };
+
+  // Top-Quelle
+  if (meta.top_source) {
+    elTopSource.textContent = `${meta.top_source.label} (${meta.top_source.count})`;
+    elTopSourceAvg.textContent =
+      typeof meta.top_source.avg_per_week === "number"
+        ? meta.top_source.avg_per_week.toFixed(2).replace(".", ",") + " / Woche"
+        : "–";
+  } else {
+    elTopSource.textContent = "–";
+    elTopSourceAvg.textContent = "–";
+  }
+
+  // Erste Erwähnung
+  elFirstDate.textContent = meta.first_mention_date
+    ? fmtDate(meta.first_mention_date)
+    : "–";
+
+  elFirstSource.textContent = meta.first_mention_source
+    ? meta.first_mention_source.label
+    : "–";
+}
+
 
 async function loadKeywordSankey(word) {
   const wrap = document.getElementById('keywordSankeyWrap');

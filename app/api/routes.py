@@ -1821,3 +1821,215 @@ def keyword_sankey(
         "items": out,
     }
 
+
+@router.get("/keywords/meta")
+def keyword_meta(
+    word: str,
+    country: list[str] | None = Query(None),
+    teaser: bool = Query(False),
+    source: list[str] | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Liefert Meta-Infos zu einem Keyword über den gesamten Datenbestand (DB):
+      - total_mentions: Gesamtzahl Artikel mit Keyword
+      - top_source: Medium mit den meisten Treffern (+ Ø/Woche)
+      - first_mention_date: Datum der ersten Nennung
+      - first_mention_source: Medium der ersten Nennung
+      - span: Zeitraum zwischen erster und letzter Nennung
+      - avg_per_week_overall: Gesamt-Ø/Woche über alle Medien
+
+    Filter: country, source, teaser (analog zu anderen Endpunkten).
+    Nutzt die Artikel aus der DB (get_articles_between), NICHT mehr get_articles().
+    """
+    from collections import Counter
+    from datetime import datetime, timezone
+    import re
+    from fastapi import HTTPException
+    from app.core.clean_utils import extract_relevant_words
+
+    # --- Keyword-Terme wie in /keywords/timeline vorbereiten ---
+    raw = (word or "").strip().lower()
+    terms = [t for t in (p.strip() for p in raw.split("+")) if t]
+    if not terms:
+        raise HTTPException(status_code=400, detail="word required")
+    patterns = [re.compile(rf"\b{re.escape(t)}\b") for t in terms]
+
+    # --- Alle Artikel aus der DB holen ("quasi all time") ---
+    # Hier KEIN _time_window_or_400, also KEIN 180-Tage-Limit.
+    # Wir setzen einfach ein sehr frühes Startdatum bis jetzt.
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    start = datetime(2000, 1, 1, tzinfo=timezone.utc)
+
+    articles = get_articles_between(db, start, now, limit=None, offset=None)
+
+    # Länderfilter (wie überall)
+    articles = filter_articles_by_countries(articles, country)
+
+    # --- Quellenfilter (Label oder norm_name möglich) ---
+    if source:
+        wanted = {(s or "").strip().lower() for s in source if s and s.strip()}
+        if wanted:
+            df = load_media_df()
+            label2norm = dict(
+                zip(
+                    df["Medium"].str.strip().str.lower(),
+                    df["norm_name"],
+                )
+            )
+
+            def norm_any(x: str | None) -> str:
+                return (x or "").strip().lower()
+
+            valid = wanted | {label2norm.get(s, s) for s in wanted}
+            articles = [
+                a
+                for a in articles
+                if norm_any(getattr(a, "source", None) or getattr(a, "medium", None)) in valid
+            ]
+
+    # --- Matching wie in keyword_timeline (Titel/Teaser, Token + Regex) ---
+    matched = []
+    for a in articles:
+        title_l = (getattr(a, "title", "") or "").lower()
+        teaser_l = (
+            (getattr(a, "teaser", "") or "").lower()
+            if (teaser and getattr(a, "teaser", None))
+            else ""
+        )
+
+        try:
+            toks_title = set(extract_relevant_words(title_l))
+            toks_teaser = (
+                set(extract_relevant_words(teaser_l))
+                if (teaser and teaser_l)
+                else set()
+            )
+        except Exception:
+            toks_title, toks_teaser = set(), set()
+
+        ok = True
+        for i, term in enumerate(terms):
+            if not (
+                patterns[i].search(title_l)
+                or (teaser and patterns[i].search(teaser_l))
+                or (term in toks_title)
+                or (term in toks_teaser)
+            ):
+                ok = False
+                break
+
+        if ok:
+            matched.append(a)
+
+    if not matched:
+        return {
+            "word": word,
+            "total_mentions": 0,
+            "top_source": None,
+            "first_mention_date": None,
+            "first_mention_source": None,
+            "span": None,
+            "avg_per_week_overall": 0.0,
+        }
+
+    # --- Hilfsfunktion: Datum in UTC normalisieren ---
+    def to_utc(dt_raw):
+        if not isinstance(dt_raw, datetime):
+            return None
+        if dt_raw.tzinfo is None:
+            return dt_raw.replace(tzinfo=timezone.utc)
+        return dt_raw.astimezone(timezone.utc)
+
+    # Nur Artikel mit gültigem Datum berücksichtigen
+    with_dates = [a for a in matched if to_utc(getattr(a, "published_at", None))]
+    if not with_dates:
+        # kein published_at -> nur Zähler pro Quelle
+        src_counts = Counter(
+            norm_source(
+                getattr(a, "source", "") or getattr(a, "medium", "")
+            )
+            for a in matched
+        )
+        top_norm, top_count = max(src_counts.items(), key=lambda x: x[1])
+        df = load_media_df()
+        name_map = dict(zip(df["norm_name"], df["Medium"]))
+        top_label = name_map.get(top_norm, top_norm)
+
+        return {
+            "word": word,
+            "total_mentions": len(matched),
+            "top_source": {
+                "norm_name": top_norm,
+                "label": top_label,
+                "count": int(top_count),
+                "avg_per_week": None,
+            },
+            "first_mention_date": None,
+            "first_mention_source": None,
+            "span": None,
+            "avg_per_week_overall": None,
+        }
+
+    # --- Zeitachse bestimmen ---
+    with_dates_sorted = sorted(with_dates, key=lambda a: to_utc(a.published_at))
+    first_article = with_dates_sorted[0]
+    last_article = with_dates_sorted[-1]
+    first_dt = to_utc(first_article.published_at)
+    last_dt = to_utc(last_article.published_at)
+
+    span_days = max(1, (last_dt - first_dt).days + 1)
+    span_weeks = span_days / 7.0
+
+    # --- Zähler pro Medium ---
+    src_counts = Counter(
+        norm_source(
+            getattr(a, "source", "") or getattr(a, "medium", "")
+        )
+        for a in matched
+        if getattr(a, "source", None) or getattr(a, "medium", None)
+    )
+    top_norm, top_count = max(src_counts.items(), key=lambda x: x[1])
+
+    df = load_media_df()
+    name_map = dict(zip(df["norm_name"], df["Medium"]))
+    top_label = name_map.get(top_norm, top_norm)
+
+    # --- Kennzahlen berechnen ---
+    total_mentions = len(matched)
+    avg_per_week_overall = total_mentions / span_weeks if span_weeks > 0 else total_mentions
+    top_avg_per_week = top_count / span_weeks if span_weeks > 0 else top_count
+
+    first_src_norm = norm_source(
+        getattr(first_article, "source", "") or getattr(first_article, "medium", "") or ""
+    )
+    first_src_label = name_map.get(
+        first_src_norm,
+        getattr(first_article, "source", "") or getattr(first_article, "medium", ""),
+    )
+
+    return {
+        "word": word,
+        "total_mentions": int(total_mentions),
+        "top_source": {
+            "norm_name": top_norm,
+            "label": top_label,
+            "count": int(top_count),
+            "avg_per_week": top_avg_per_week,
+        },
+        "first_mention_date": first_dt.isoformat() if first_dt else None,
+        "first_mention_source": {
+            "norm_name": first_src_norm,
+            "label": first_src_label,
+        }
+        if first_src_norm
+        else None,
+        "span": {
+            "from": first_dt.isoformat() if first_dt else None,
+            "to": last_dt.isoformat() if last_dt else None,
+            "days": span_days,
+            "weeks": span_weeks,
+        },
+        "avg_per_week_overall": avg_per_week_overall,
+    }
+

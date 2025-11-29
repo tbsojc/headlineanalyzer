@@ -6,12 +6,17 @@ from __future__ import annotations
 
 import http.client
 import feedparser
+import logging
+import requests
+
 from dateutil import parser as date_parse
 from datetime import datetime, timezone
 from typing import List
 
 from app.schemas import Article as ArticleSchema
 from app.core.clean_utils import clean_html
+
+logger = logging.getLogger(__name__)
 
 
 FEEDS = {
@@ -52,7 +57,7 @@ FEEDS = {
     "Correctiv": "https://correctiv.org/feed/",
     "Netzpolitik.org": "https://netzpolitik.org/feed/",
     "Norbert Häring": "https://norberthaering.de/feed",
-    "Overton-Magazin (Politik)": "https://overton-magazin.de/feed/?cat=2222,2398",
+    "Overton-Magazin (Politik)": "https://overton-magazin.de/feed/",
     "Berliner Zeitung (Politik)": "https://www.berliner-zeitung.de/feed.id_politik_und_gesellschaft.xml",
     "der Freitag (Politik)": "https://www.freitag.de/politik/@@RSS",
     "Makroskop": "https://makroskop.eu/feed/index.xml",
@@ -102,10 +107,45 @@ FEEDS = {
     "Hintergrund": "https://www.hintergrund.de/feed/",
     "The European": "http://www.theeuropean.de/rss.xml",
     "Freilich": "https://www.freilich-magazin.com/rss.xml",
-    "anderewelt.online": "https://www.anderweltonline.com/rss.xml",
     "Publikumskonferenz": "https://publikumskonferenz.de/blog/feed/",
-    "AnonymousNews": "https://www.anonymousnews.org/feed/"
+    "AnonymousNews": "https://www.anonymousnews.org/feed/",
+    "anderewelt.online": "https://www.anderweltonline.com/rss.xml",
+    "Blog der Republik": "https://www.blog-der-republik.de/feed/",
+    "Relevante Ökonomik": "https://www.relevante-oekonomik.com/feed/",
+    "Rationalgalerie": "https://www.rationalgalerie.de/home?format=feed&type=rss",
+    "Unsere Zeit": "https://www.unsere-zeit.de/feed/gn",
+    "Free21": "https://free21.org/feed/",
+    "Liberatus": "https://libratus.online/de/?format=feed&type=rss",
+    "Zackbum": "https://www.zackbum.ch/feed/",
+    "Kontrast": "https://kontrast.at/feed/"
 }
+
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; HeadlineAnalyzer/1.0; +https://example.com)"
+}
+
+
+def _load_feed(source: str, url: str):
+    """
+    Holt einen Feed mit Timeout und parst ihn mit feedparser.
+    Einzelne Problemquellen blockieren damit nicht den gesamten Import.
+    """
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+    except requests.exceptions.Timeout:
+        logger.error("[FEED] Timeout beim Abruf von %s (%s) – Quelle wird übersprungen.", source, url)
+        return None
+    except requests.RequestException as e:
+        logger.error("[FEED] HTTP-Fehler bei %s (%s): %s – Quelle wird übersprungen.", source, url, e)
+        return None
+
+    try:
+        return feedparser.parse(resp.content)
+    except Exception as e:
+        logger.error("[FEED] Fehler beim Parsen von %s (%s): %s – Quelle wird übersprungen.", source, url, e)
+        return None
+
 
 EXCLUDED_WORDS = [
     "premium", "abo", "online"
@@ -178,30 +218,47 @@ def fetch_articles(limit_per_feed: int = 250) -> List[ArticleSchema]:
     """
     Lädt alle FEEDS und gibt eine Liste von ArticleSchema zurück.
     Fehlerhafte Feeds/Einträge werden geloggt und übersprungen.
+    Eine einzelne kaputte Quelle blockiert den Import nicht mehr.
     """
     items: List[ArticleSchema] = []
 
     for source, url in FEEDS.items():
-        try:
-            feed = feedparser.parse(url)
-        except http.client.IncompleteRead:
-            print(f"[ERROR] Feed von {source} konnte nicht vollständig geladen werden.")
-            continue
-        except Exception as e:
-            print(f"[ERROR] Fehler beim Parsen von {source}: {e}")
+        logger.info("[FEED] Starte Import für %s (%s)", source, url)
+
+        feed = _load_feed(source, url)
+        if feed is None:
+            # Diese Quelle war nicht lesbar → nächste Quelle
             continue
 
-        for entry in feed.entries[:limit_per_feed]:
-            art = _to_article_schema(entry, source)
-            if art is None:
-                print(f"[INFO] Ungültiger Artikel übersprungen ({source})")
+        entries = getattr(feed, "entries", []) or []
+        for idx, entry in enumerate(entries[:limit_per_feed]):
+            try:
+                art = _to_article_schema(entry, source)
+            except Exception as e:
+                logger.error(
+                    "[FEED] Fehler beim Umwandeln eines Eintrags aus %s (Index %s): %s – Eintrag wird übersprungen.",
+                    source, idx, e
+                )
                 continue
+
+            if art is None:
+                logger.info("[FEED] Ungültiger Artikel übersprungen (%s, Index %s)", source, idx)
+                continue
+
+            # Optional: bestimmte Worte ausschließen
+            title_l = (art.title or "").lower()
+            if any(w in title_l for w in EXCLUDED_WORDS):
+                logger.debug("[FEED] Artikel aus %s verworfen wegen EXCLUDED_WORDS: %r", source, art.title)
+                continue
+
             items.append(art)
+
+        logger.info("[FEED] Import für %s abgeschlossen: %d Artikel", source, len(items))
 
     return items
 
 
-def fetch_articles_from_source(source_name: str, limit: int = 25) -> List[ArticleSchema]:
+def fetch_articles_from_source(source_name: str, limit: int = 50) -> List[ArticleSchema]:
     """
     Lädt einen einzelnen Feed (per Name in FEEDS) und gibt ArticleSchema-Objekte zurück.
     """
@@ -209,17 +266,25 @@ def fetch_articles_from_source(source_name: str, limit: int = 25) -> List[Articl
     if not url:
         return []
 
-    try:
-        feed = feedparser.parse(url)
-    except Exception as e:
-        print(f"[ERROR] Fehler beim Parsen von {source_name}: {e}")
+    feed = _load_feed(source_name, url)
+    if feed is None:
         return []
 
     items: List[ArticleSchema] = []
-    for entry in feed.entries[:limit]:
-        art = _to_article_schema(entry, source_name)
+    entries = getattr(feed, "entries", []) or []
+    for idx, entry in enumerate(entries[:limit]):
+        try:
+            art = _to_article_schema(entry, source_name)
+        except Exception as e:
+            logger.error(
+                "[FEED] Fehler beim Umwandeln eines Eintrags aus %s (Index %s): %s – Eintrag wird übersprungen.",
+                source_name, idx, e
+            )
+            continue
+
         if art is None:
             continue
+
         items.append(art)
 
     return items
