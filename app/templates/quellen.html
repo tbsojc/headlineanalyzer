@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div id="app"
+     data-initial-source="{{ source|e }}">
+  <header class="page-header">
+    <h1>Analyse der Quelle: {{ source }}</h1>
+  </header>
+
+  <!-- Filterbar wie auf der Keyword-Seite (Zeit, Länder, ggf. Quelle-Selector) -->
+  <section id="filters">
+    <!-- hier deine bestehenden Filter-Controls einfügen -->
+  </section>
+
+  <!-- 1. Wordcloud -->
+  <section id="heroWordcloud">
+    <div class="wordcloud-heading"></div>
+    <div id="wordcloud"></div>
+  </section>
+
+    <!-- Absolute Nennungen Top 25 -->
+    <section id="keywordTopAbsoluteSection">
+      <h2>Absolute Nennungen Top 25</h2>
+      <h3>Im gewählten Zeitraum – Vergleich mit identischem Zeitraum davor</h3>
+      <div id="keywordTopAbsoluteTableWrap"></div>
+    </section>
+
+</div>
+
+    <!-- Chronik: Top-Keywords je Kalenderwoche -->
+    <section id="weeklyChronicle" class="chart-box">
+      <h2>🗓️ Chronik: Top-Keywords je Kalenderwoche</h2>
+      <div id="weeklyChronicleBody">
+        <div class="empty-state">Wird geladen…</div>
+      </div>
+    </section>
+
+    <!-- Gefilterte Artikel -->
+    <section class="chart-box">
+      <h2>Gefilterte Artikel</h2>
+      <div id="filteredArticles"></div>
+    </section>
+
+<script src="/static/app-common.js"></script>
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const root = document.getElementById("app");
+    const initialSource = root.dataset.initialSource;
+    // zentrale Initialisierung für die Quellen-Seite
+    if (typeof initSourceView === "function") {
+      initSourceView(initialSource);
+    }
+  });
+</script>
+{% endblock %}

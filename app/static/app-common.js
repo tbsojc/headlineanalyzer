@@ -39,13 +39,20 @@
     };
 
 
-    // Keyword aus /ui/<keyword> extrahieren
+    // Keyword bzw. Quelle aus der URL extrahieren
     const path = window.location.pathname;
     const parts = path.split("/").filter(Boolean);
     let pageKeyword = null;
+    let pageSource  = null;
+
     if (parts.length === 2 && parts[0] === "ui") {
+      // /ui/<keyword>
       pageKeyword = decodeURIComponent(parts[1]);
+    } else if (parts.length === 3 && parts[0] === "ui" && parts[1] === "quelle") {
+      // /ui/quelle/<source>
+      pageSource = decodeURIComponent(parts[2]);
     }
+
 
 
 
@@ -84,14 +91,22 @@ window.addEventListener('load', () => {
   // URL normalisieren (exactly one of hours / from-to)
   updateURLFromFilters(true);
 
-  // Wenn wir auf /ui/<keyword> sind, Keyword aus Pfad in Filter übernehmen
+  // Keyword/Quelle aus Pfad in Filter übernehmen
   if (pageKeyword) {
     FILTERS.keyword = pageKeyword;
     selectedKeyword = pageKeyword;
 
     const kwInput = document.getElementById("keywordInput");
     if (kwInput) kwInput.value = pageKeyword;
+  } else if (pageSource) {
+    // Quellen-Seite: genau diese Quelle aktiv setzen
+    ACTIVE_SOURCES.clear();
+    ACTIVE_SOURCES.add(pageSource);
+
+    // Für Alt-Code / <select>
+    FILTERS.source = pageSource;
   }
+
 
   // Badge initial setzen
   updateDateRangeBadge();

@@ -57,6 +57,16 @@ async def ui_detail(request: Request, keyword: str):
         "keyword": keyword,
     })
 
+@app.get("/ui/quelle/{source}", response_class=HTMLResponse)
+async def ui_source_detail(request: Request, source: str):
+    return templates.TemplateResponse(
+        "quellen.html",
+        {
+            "request": request,
+            "source": source,
+        },
+    )
+
 
 # --- Router ---
 app.include_router(api_router)
