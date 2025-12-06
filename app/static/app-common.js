@@ -18,7 +18,8 @@
       source: null,
       keyword: null,
       teaser: false,
-      ngram: 1
+      ngram: 1,
+      tagCategory: "",
     };
 
     const ACTIVE_SOURCES = new Set();        // ← neue Mehrfachauswahl
@@ -129,8 +130,11 @@ window.addEventListener('load', () => {
   // Initiale Datenladungen (wie früher)
   loadWordcloud();
   loadTopAbsoluteKeywords();
+  loadTagCategories();
+  loadTopAbsoluteTags();
   loadWeeklyChronicle();
   loadFilteredArticles();
+
 
   // Rest, sobald der Browser Leerlauf hat (Fallback auf setTimeout)
   const idle = window.requestIdleCallback || (fn => setTimeout(fn, 150));
@@ -385,6 +389,7 @@ async function searchByKeyword(kw = null) {
   loadWordcloud();
   updateFilterDisplay();
   renderKeywordMeta(keyword);
+
 
 
 
@@ -681,11 +686,168 @@ async function loadTopAbsoluteKeywords() {
 }
 
 
+async function loadTopAbsoluteTags() {
+  // ➜ Tage aus aktuellem Zeitraum ableiten (min 1, max 30 – Serverlimit)
+  const spanDays = (() => {
+    try {
+      const from = new Date(FILTERS.from);
+      const to   = new Date(FILTERS.to);
+      const diff = Math.ceil((to - from) / 86400000);
+      return Math.min(Math.max(diff, 1), 30);
+    } catch { return 7; }
+  })();
+
+  const qs = new URLSearchParams({
+    ngram: String(FILTERS.ngram ?? 1),
+    compare_prev: "1",
+    top_n: "25",
+    spark_days: String(spanDays)
+  });
+  if (FILTERS.teaser) qs.set("teaser", "true");
+  appendSources(qs);
+  appendCountries(qs);
+  if (FILTERS.tagCategory) qs.set("category", FILTERS.tagCategory);
+
+  const url = withTime("/tags/top-absolute", qs.toString());
+  const res = await fetch(url, { cache: "no-store" });
+  const wrap = document.getElementById("tagTopAbsoluteTableWrap");
+  if (!wrap) return;
+
+  if (!res.ok) {
+    wrap.innerHTML = `<div class="empty-state">Fehler beim Laden (${res.status}).</div>`;
+    return;
+  }
+  const data = await res.json();
+
+  if (!Array.isArray(data) || data.length === 0) {
+    wrap.innerHTML = `<div class="empty-state">Keine Daten im gewählten Zeitraum.</div>`;
+    return;
+  }
+
+  // Mini-SVG Sparkline (unverändert)
+  function svgColumnSpark(values = [], {w=90, h=18, gap=2} = {}) {
+    if (!values.length) return "—";
+    const max = Math.max(...values, 1);
+    const n = values.length;
+    const barW = Math.max(1, Math.floor((w - gap*(n-1)) / n));
+    let x = 0;
+    const bars = values.map(v => {
+      const bh = Math.max(1, Math.round((v / max) * (h - 1)));
+      const y = h - bh;
+      const rect = `<rect x="${x}" y="${y}" width="${barW}" height="${bh}" rx="1" ry="1"></rect>`;
+      x += barW + gap;
+      return rect;
+    }).join("");
+    return `<svg class="spark spark--cols" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true">${bars}</svg>`;
+  }
+
+  // 🆕 Hilfsfunktion: Rang-Vergleich mit Pfeil
+  function renderRankChange(current, previous) {
+    if (!previous || previous === 0) return `${current} <span class="rank-dash">–</span>`;
+    const diff = previous - current;
+    let arrow = '<span class="rank-dash">–</span>';
+    if (diff > 0) arrow = '<span class="rank-up">▲</span>';
+    else if (diff < 0) arrow = '<span class="rank-down">▼</span>';
+    return `${current} ${arrow} <span class="rank-prev">(${previous})</span>`;
+  }
+
+  // Tabelle rendern – Spaltenkopf „7-Tage“ → dynamisch
+  const table = document.createElement("table");
+  table.className = "topabs-table";
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Tag</th>
+        <th>Aktuell</th>
+        <th>${spanDays}-Tage</th>
+        <th>Rang (vorher)</th>
+        <th>Vorher</th>
+        <th>Δ abs</th>
+        <th>Δ %</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  `;
+  const tbody = table.querySelector("tbody");
+
+  data.forEach((row, idx) => {
+    const tr = document.createElement("tr");
+    const pctDisplay = (row.previous === 0 && row.current > 0)
+      ? "neu"
+      : `${row.change_pct >= 0 ? "+" : ""}${Math.round(row.change_pct)}%`;
+
+    const sparkHTML = Array.isArray(row.spark) && row.spark.length
+      ? svgColumnSpark(row.spark)
+      : "—";
+
+    tr.innerHTML = `
+      <td>${row.rank_current ?? (idx + 1)}</td>
+      <td><button class="linklike" data-kw="${row.word}">${row.word}</button></td>
+      <td>${row.current}</td>
+      <td class="sparkcell">${sparkHTML}</td>
+      <td class="rank-cell">
+        ${renderRankChange(row.rank_current, row.rank_prev)}
+      </td>
+      <td>${row.previous}</td>
+      <td class="${row.delta >= 0 ? 'trend-up':'trend-down'}">
+        ${row.delta >= 0 ? "+" : ""}${row.delta}
+      </td>
+      <td class="${row.delta >= 0 ? 'trend-up':'trend-down'}">${pctDisplay}</td>
+    `;
+    tr.querySelector('button[data-kw]').addEventListener('click', () => searchByKeyword(row.word));
+    tbody.appendChild(tr);
+  });
+
+  wrap.innerHTML = "";
+  wrap.appendChild(table);
+}
+
+async function loadTagCategories() {
+  const select = document.getElementById("tagCategorySelect");
+  if (!select) return;
+
+  // Basisoption "Alle" immer lassen
+  select.innerHTML = `<option value="">Alle</option>`;
+
+  try {
+    const res = await fetch(withTime("/tags/categories"), { cache: "no-store" });
+    if (!res.ok) return;
+
+    const data = await res.json();
+    if (!Array.isArray(data)) return;
+
+    data.forEach(cat => {
+      const opt = document.createElement("option");
+      opt.value = cat;
+      opt.textContent = cat;
+      select.appendChild(opt);
+    });
+
+    // Aktuellen Filterwert setzen
+    if (FILTERS.tagCategory) {
+      select.value = FILTERS.tagCategory;
+    }
+
+    // Event-Handler nur einmal setzen
+    select.addEventListener("change", () => {
+      const value = select.value || "";
+      FILTERS.tagCategory = value;
+      // Tabelle neu laden
+      loadTopAbsoluteTags();
+    });
+
+  } catch (e) {
+    console.error("Fehler beim Laden der Tag-Kategorien", e);
+  }
+}
+
 
   // zentrale Refresh-Funktion: alles neu laden, was vom Bias abhängt
   function applyFilters() {
     loadExtremeBubbles();
     loadTopAbsoluteKeywords();
+    loadTopAbsoluteTags();
     loadFilteredArticles();
     loadKeywordTrends();
     loadWordcloud();
@@ -928,8 +1090,6 @@ window.addEventListener('load', () => markActiveNgram(filters.ngram));
 
   container.appendChild(wrap);
 }
-
-
 
 async function loadExtremeBubbles() {
   const bubblesRes = await fetch(withTime("/keywords/extreme-bubble"));
@@ -2338,6 +2498,7 @@ function updateBlindspotInfo() {
       loadKeywordTrends();
       loadExtremeBubbles();
       loadTopAbsoluteKeywords();
+      loadTopAbsoluteTags();
       loadFilteredMediaCompass();
       updateFilterDisplay();
       loadBlindspotFeed();
@@ -2352,6 +2513,7 @@ function updateBlindspotInfo() {
       loadExtremeBubbles();     // 🔄 aktualisieren
       loadWordcloud();
       loadTopAbsoluteKeywords();
+      loadTopAbsoluteTags();
       loadFilteredMediaCompass();
       updateFilterDisplay();
       loadBlindspotFeed();
@@ -2470,6 +2632,7 @@ function renderActiveFilterChips(){
       loadFilteredArticles();
       loadExtremeBubbles();
       loadTopAbsoluteKeywords();
+      loadTopAbsoluteTags();
       loadFilteredMediaCompass();
       renderActiveFilterChips();
       loadBlindspotFeed();

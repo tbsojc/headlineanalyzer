@@ -32,7 +32,8 @@ from app.api.perf import ensure_indexes, MAX_ROWS_PER_REQUEST, DEFAULT_PAGE_SIZE
 from math import ceil
 from fastapi import Response
 
-
+from app.models_sql import ArticleORM
+from app.services.tagging import list_categories, get_tag_category
 
 router = APIRouter()
 
@@ -2033,3 +2034,277 @@ def keyword_meta(
         "avg_per_week_overall": avg_per_week_overall,
     }
 
+
+@router.get("/tags/overview")
+def tags_overview(
+    hours: int = Query(72),
+    country: list[str] | None = Query(None),
+    source: list[str] | None = Query(None),
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    # Zeitfenster + Artikel holen (alle im Fenster)
+    arts, start, end, mode, bucket = _select_articles(
+        db, hours, from_, to,
+        unbounded=True,
+        order="desc",
+        # request nicht nötig, Standard ist None
+    )
+
+    # Länderfilter
+    arts = filter_articles_by_countries(arts, country)
+
+    # Quellenfilter (analog zu /articles/filtered)
+    if source:
+        wanted = {s.strip().lower() for s in source if s and s.strip()}
+        if wanted:
+            df = load_media_df()
+            label2norm = dict(zip(
+                df["Medium"].str.strip().str.lower(),
+                df["norm_name"]
+            ))
+            valid = wanted | {label2norm.get(s, s) for s in wanted}
+            arts = [
+                a for a in arts
+                if (a.source or "").strip().lower() in valid
+            ]
+
+    from collections import Counter
+    c = Counter()
+    for a in arts:
+        tags = getattr(a, "tags", None) or []
+        for t in tags:
+            c[t] += 1
+
+    # sortiert zurückgeben
+    return [
+        {"tag": tag, "count": count}
+        for tag, count in c.most_common()
+    ]
+
+@router.get("/articles/by-tag", response_model=list[ArticleSchema])
+def articles_by_tag(
+    tag: str = Query(...),
+    hours: int = Query(72),
+    country: list[str] | None = Query(None),
+    source: list[str] | None = Query(None),
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    arts, start, end, mode, bucket = _select_articles(
+        db, hours, from_, to,
+        unbounded=True,
+        order="desc",
+        # request nicht übergeben
+    )
+
+    arts = filter_articles_by_countries(arts, country)
+
+    if source:
+        wanted = {s.strip().lower() for s in source if s and s.strip()}
+        if wanted:
+            df = load_media_df()
+            label2norm = dict(zip(
+                df["Medium"].str.strip().str.lower(),
+                df["norm_name"]
+            ))
+            valid = wanted | {label2norm.get(s, s) for s in wanted}
+            arts = [
+                a for a in arts
+                if (a.source or "").strip().lower() in valid
+            ]
+
+    tag_lower = tag.strip().lower()
+    filtered = [
+        a for a in arts
+        if any((t or "").strip().lower() == tag_lower for t in (a.tags or []))
+    ]
+
+    return filtered
+
+
+@router.get("/media-positions/by-tag")
+def media_positions_by_tag(
+    tag: str,
+    hours: int = Query(72),
+    country: list[str] | None = Query(None),
+    source: Optional[str] = Query(None),
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    tag_lower = tag.strip().lower()
+
+    articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
+
+    articles = filter_articles_by_countries(articles, country)
+
+    if source:
+        s = norm_source(source)
+        articles = [a for a in articles if norm_source(a.source) == s]
+
+    # Filter nach Tag
+    def has_tag(a):
+        tags = getattr(a, "tags", None) or []
+        return any((t or "").strip().lower() == tag_lower for t in tags)
+
+    articles = [a for a in articles if has_tag(a)]
+
+    from collections import Counter
+    source_counts = Counter(norm_source(a.source) for a in articles)
+
+    df = load_media_df()
+    filtered = df[df["norm_name"].isin(source_counts.keys())]
+
+    data = [
+        {
+            "medium": row["Medium"],
+            "x": row["Systemnähe (X)"],
+            "y": row["Globalismus (Y)"],
+            "count": source_counts[row["norm_name"]],
+        }
+        for _, row in filtered.iterrows()
+    ]
+    return JSONResponse(content=jsonable_encoder(data))
+
+@router.get("/tags/top-absolute")
+def tags_top_absolute(
+    hours: int = Query(72),
+    country: list[str] | None = Query(None),
+    compare_prev: bool = Query(False),
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
+    source: list[str] | None = Query(None),
+    top_n: int = Query(10, ge=1, le=200),
+    spark_days: int = Query(0, ge=0, le=30),   # 0 = aus, >0 = Spark aktiv
+    category: str | None = Query(None),        # Kategorie-Filter (z. B. "Partei", "Nation", ...)
+    db: Session = Depends(get_db),
+):
+    from collections import Counter
+    from datetime import timedelta
+
+    # 1) Zeitfenster & Artikel
+    articles, start, end, mode, bucket = _select_articles(db, hours, from_, to)
+    articles = filter_articles_by_countries(articles, country)
+
+    # Quellenfilter (einfach wie bei /keywords/top-absolute)
+    source_set = None
+    if source:
+        source_set = {(s or "").strip().lower() for s in source}
+        def norm(x): return (x or "").strip().lower()
+        articles = [a for a in articles if norm(getattr(a, "source", None)) in source_set]
+
+    # 2) Zählen: aktuelle und (optional) vorige Periode
+    now_tags = Counter()
+    for a in articles:
+        tags = getattr(a, "tags", None) or []
+        for t in tags:
+            if not t:
+                continue
+            # Kategorie-Filter anwenden
+            if category and get_tag_category(t) != category:
+                continue
+            now_tags[t] += 1
+
+    past_tags = Counter()
+    if compare_prev:
+        p_start, p_end = previous_window(start, end)
+        prev_articles = get_articles_between(db, p_start, p_end)
+        prev_articles = filter_articles_by_countries(prev_articles, country)
+        if source_set:
+            def norm(x): return (x or "").strip().lower()
+            prev_articles = [
+                a for a in prev_articles
+                if norm(getattr(a, "source", None)) in source_set
+            ]
+
+        for a in prev_articles:
+            tags = getattr(a, "tags", None) or []
+            for t in tags:
+                if not t:
+                    continue
+                if category and get_tag_category(t) != category:
+                    continue
+                past_tags[t] += 1
+
+    # 3) Ränge
+    rank_current = {tag: i + 1 for i, (tag, _) in enumerate(now_tags.most_common())}
+    rank_prev    = {tag: i + 1 for i, (tag, _) in enumerate(past_tags.most_common())}
+
+    # 4) Top N Ergebnis (ohne Spark)
+    top_tags = [tag for tag, _ in now_tags.most_common(top_n)]
+    result: list[dict] = []
+    for tag in top_tags:
+        current_count = now_tags.get(tag, 0)
+        prev_count = past_tags.get(tag, 0)
+        delta = current_count - prev_count
+        if prev_count > 0:
+            change_pct = delta / prev_count * 100.0
+        else:
+            change_pct = 100.0 if current_count > 0 else 0.0
+
+        result.append({
+            "word": tag,  # wichtig: 'word', damit dein JS weiter funktioniert
+            "current": int(current_count),
+            "previous": int(prev_count),
+            "delta": int(delta),
+            "change_pct": round(change_pct, 2),
+            "rank_current": rank_current.get(tag),
+            "rank_prev":    rank_prev.get(tag),
+        })
+
+    # 5) Optional: Sparkline für Top-Tags
+    if spark_days and top_tags:
+        spark_end = end
+        spark_start = (spark_end - timedelta(days=spark_days)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
+        spark_articles = get_articles_between(db, spark_start, spark_end)
+        spark_articles = filter_articles_by_countries(spark_articles, country)
+        if source_set:
+            def norm(x): return (x or "").strip().lower()
+            spark_articles = [
+                a for a in spark_articles
+                if norm(getattr(a, "source", None)) in source_set
+            ]
+
+        day_index = lambda dt: (dt.date() - spark_start.date()).days
+        series = {t: [0] * spark_days for t in top_tags}
+
+        for a in spark_articles:
+            dt = getattr(a, "published_at", None) or getattr(a, "created_at", None)
+            if not dt:
+                continue
+            try:
+                idx = day_index(dt)
+            except Exception:
+                continue
+            if not (0 <= idx < spark_days):
+                continue
+
+            tags = getattr(a, "tags", None) or []
+            for t in tags:
+                # Kategorie-Filter auch hier sicherheitshalber beachten
+                if category and get_tag_category(t) != category:
+                    continue
+                if t in series:
+                    series[t][idx] += 1
+
+        # In Ergebnis einhängen
+        lookup = {row["word"]: row for row in result}
+        for tag, vals in series.items():
+            lookup[tag]["spark"] = list(vals)
+
+    return result
+
+
+@router.get("/tags/categories")
+def tags_categories():
+    """
+    Liefert die Liste aller verfügbaren Tag-Kategorien,
+    z.B. ["Nation", "Partei", "Person", ...]
+    """
+    return list_categories()

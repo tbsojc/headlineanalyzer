@@ -8,6 +8,7 @@ class Article(BaseModel):
     url: str
     source: str
     topic: str
+    tags: list[str] | None = None
     published_at: datetime
 
     class Config:
